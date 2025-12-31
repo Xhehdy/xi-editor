@@ -168,6 +168,7 @@ pub fn start_new_server(
         .expect("Error Occurred");
 
     let writer = Box::new(BufWriter::new(process.stdin.take().unwrap()));
+    let stdout = process.stdout.take().unwrap();
 
     let language_server_client = Arc::new(Mutex::new(LanguageServerClient::new(
         writer,
@@ -179,25 +180,33 @@ pub fn start_new_server(
 
     {
         let ls_client = language_server_client.clone();
-        let mut stdout = process.stdout;
-
         // Unwrap to indicate that we want thread to panic on failure
         std::thread::Builder::new()
             .name(format!("{}-lsp-stdout-Looper", language_id))
             .spawn(move || {
-                let mut reader = Box::new(BufReader::new(stdout.take().unwrap()));
+                let mut reader = Box::new(BufReader::new(stdout));
                 loop {
                     match parse_helper::read_message(&mut reader) {
                         Ok(message_str) => {
                             let mut server_locked = ls_client.lock().unwrap();
                             server_locked.handle_message(message_str.as_ref());
                         }
-                        Err(err) => error!("Error occurred {:?}", err),
+                        Err(err) => {
+                            error!("Error occurred {:?}", err);
+                            break;
+                        }
                     };
                 }
             })
             .unwrap();
     }
+
+    std::thread::Builder::new()
+        .name(format!("{}-lsp-child-waiter", language_id))
+        .spawn(move || {
+            let _ = process.wait();
+        })
+        .unwrap();
 
     Ok(language_server_client)
 }

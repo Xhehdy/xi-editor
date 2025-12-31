@@ -68,12 +68,13 @@ pub enum PluginActivation {
 }
 
 /// Describes the scope of events a plugin receives.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PluginScope {
     /// The plugin receives events from multiple buffers.
     Global,
     /// The plugin receives events for a single buffer.
+    #[default]
     BufferLocal,
     /// The plugin is launched in response to a command, and receives no
     /// further updates.
@@ -220,12 +221,6 @@ impl PluginDescription {
     /// Returns `true` if this plugin is globally scoped, else `false`.
     pub fn is_global(&self) -> bool {
         matches!(self.scope, PluginScope::Global)
-    }
-}
-
-impl Default for PluginScope {
-    fn default() -> Self {
-        PluginScope::BufferLocal
     }
 }
 

@@ -1,0 +1,21 @@
+[package]
+name = "cortex-rope"
+description = "Rope data structure for efficient text editing (forked from xi-rope)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytecount.workspace = true
+memchr.workspace = true
+regex.workspace = true
+unicode-segmentation.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+serde_test = "1.0"
+
+[features]
+default = []
+serde = ["dep:serde"]

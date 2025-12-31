@@ -34,9 +34,9 @@ pub struct PluginCatalog {
 /// Errors that can occur while trying to load a plugin.
 #[derive(Debug)]
 pub enum PluginLoadError {
-    Io(io::Error),
+    Io(#[allow(dead_code)] io::Error),
     /// Malformed manifest
-    Parse(toml::de::Error),
+    Parse(#[allow(dead_code)] toml::de::Error),
 }
 
 #[allow(dead_code)]
@@ -84,9 +84,10 @@ impl<'a> PluginCatalog {
 
     /// Returns the plugin located at the provided file path.
     pub fn get_from_path(&self, path: &PathBuf) -> Option<Arc<PluginDescription>> {
+        let path = path.to_string_lossy();
         self.items
             .values()
-            .find(|&v| v.exec_path.to_str().unwrap().contains(path.to_str().unwrap()))
+            .find(|&v| v.exec_path.to_string_lossy().contains(path.as_ref()))
             .cloned()
     }
 
@@ -124,7 +125,7 @@ fn find_all_manifests(paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 fn load_manifest(path: &Path) -> Result<PluginDescription, PluginLoadError> {
-    let mut file = fs::File::open(&path)?;
+    let mut file = fs::File::open(path)?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     let mut manifest: PluginDescription = toml::from_str(&contents)?;
@@ -135,11 +136,11 @@ fn load_manifest(path: &Path) -> Result<PluginDescription, PluginLoadError> {
 
     for lang in &mut manifest.languages {
         let lang_config_path =
-            path.parent().unwrap().join(&lang.name.as_ref()).with_extension("toml");
+            path.parent().unwrap().join(lang.name.as_ref()).with_extension("toml");
         if !lang_config_path.exists() {
             continue;
         }
-        let lang_defaults = fs::read_to_string(&lang_config_path)?;
+        let lang_defaults = fs::read_to_string(lang_config_path)?;
         let lang_defaults = table_from_toml_str(&lang_defaults)?;
         lang.default_config = Some(lang_defaults);
     }

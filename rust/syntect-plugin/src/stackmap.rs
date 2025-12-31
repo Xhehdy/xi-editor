@@ -69,7 +69,7 @@ impl Node {
             }
         }
         // not the last item: recurse, creating node as necessary
-        if self.children.get(first).is_none() {
+        if !self.children.contains_key(first) {
             self.children.insert(first.to_owned(), Node::default());
         }
         self.children.get_mut(first).unwrap().get_value(&stack[1..], next_id)

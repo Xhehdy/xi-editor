@@ -1,0 +1,14 @@
+[package]
+name = "cortex-protocol"
+description = "IPC protocol definitions (Core <-> UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cortex-events = { path = "../cortex-events" }
+cortex-patch = { path = "../cortex-patch" }
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true  # MessagePack for high-perf serialization
+thiserror.workspace = true

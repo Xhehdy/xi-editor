@@ -30,6 +30,7 @@
     clippy::unreadable_literal,
     clippy::get_unwrap
 )]
+#![allow(non_local_definitions)]
 
 #[macro_use]
 extern crate log;

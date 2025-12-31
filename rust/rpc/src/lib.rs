@@ -22,6 +22,7 @@
 //! Because these changes make the protocol not fully compliant with the spec,
 //! the `"jsonrpc"` member is omitted from request and response objects.
 #![allow(clippy::boxed_local, clippy::or_fun_call)]
+#![allow(non_local_definitions)]
 
 #[macro_use]
 extern crate serde_json;
@@ -155,16 +156,6 @@ impl<'a, W: Write + 'static> Drop for PanicGuard<'a, W> {
             error!("panic guard hit, closing runloop");
             self.0.disconnect();
         }
-    }
-}
-
-trait IdleProc: Send {
-    fn call(self: Box<Self>, token: usize);
-}
-
-impl<F: Send + FnOnce(usize)> IdleProc for F {
-    fn call(self: Box<F>, token: usize) {
-        (*self)(token)
     }
 }
 

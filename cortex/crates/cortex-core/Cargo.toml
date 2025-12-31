@@ -1,0 +1,32 @@
+[package]
+name = "cortex-core"
+description = "Main Cortex IDE core process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cortex"
+path = "src/main.rs"
+
+[dependencies]
+cortex-rope = { path = "../cortex-rope", features = ["serde"] }
+cortex-buffer = { path = "../cortex-buffer" }
+cortex-patch = { path = "../cortex-patch" }
+cortex-events = { path = "../cortex-events" }
+cortex-protocol = { path = "../cortex-protocol" }
+cortex-scheduler = { path = "../cortex-scheduler" }
+cortex-syntax = { path = "../cortex-syntax" }
+cortex-intent = { path = "../cortex-intent" }
+cortex-ce = { path = "../cortex-ce" }
+cortex-graph = { path = "../cortex-graph" }
+cortex-vectors = { path = "../cortex-vectors" }
+cortex-llm = { path = "../cortex-llm" }
+
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

@@ -49,7 +49,7 @@ impl Recorder {
     /// - If the current recording name is specified, the active recording is saved
     /// - If no recording name is specified, the currently active recording is saved
     /// - If a recording name other than the active recording is specified,
-    /// the current recording will be thrown out and will be switched to the new name
+    ///   the current recording will be thrown out and will be switched to the new name
     ///
     /// In addition to the above:
     /// - If the recording was saved, there is no active recording
@@ -114,7 +114,7 @@ impl Recorder {
         let is_current_recording: bool = self
             .active_recording
             .as_ref()
-            .map_or(false, |current_recording| current_recording == recording_name);
+            .is_some_and(|current_recording| current_recording == recording_name);
 
         if is_current_recording {
             warn!("Cannot play recording while it's currently active!");

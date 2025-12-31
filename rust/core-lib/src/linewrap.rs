@@ -28,9 +28,10 @@ use crate::styles::{Style, N_RESERVED_STYLES};
 use crate::width_cache::{CodepointMono, Token, WidthCache, WidthMeasure};
 
 /// The visual width of the buffer for the purpose of word wrapping.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub(crate) enum WrapWidth {
     /// No wrapping in effect.
+    #[default]
     None,
 
     /// Width in bytes (utf-8 code units).
@@ -40,12 +41,6 @@ pub(crate) enum WrapWidth {
 
     /// Width in px units, requiring measurement by the front-end.
     Width(f64),
-}
-
-impl Default for WrapWidth {
-    fn default() -> Self {
-        WrapWidth::None
-    }
 }
 
 impl WrapWidth {

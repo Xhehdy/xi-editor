@@ -11,6 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#![allow(non_local_definitions)]
 #[macro_use]
 extern crate serde_derive;
 extern crate serde_json;

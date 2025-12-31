@@ -664,7 +664,7 @@ impl Editor {
         view.update_annotations(plugin, iv, Annotations { items: spans, annotation_type });
     }
 
-    pub(crate) fn get_rev(&self, rev: RevToken) -> Option<Cow<Rope>> {
+    pub(crate) fn get_rev(&self, rev: RevToken) -> Option<Cow<'_, Rope>> {
         let text_cow = if rev == self.engine.get_head_rev_id().token() {
             Cow::Borrowed(&self.text)
         } else {
@@ -735,12 +735,7 @@ impl EditType {
 }
 
 fn last_selection_region(regions: &[SelRegion]) -> Option<&SelRegion> {
-    for region in regions.iter().rev() {
-        if !region.is_caret() {
-            return Some(region);
-        }
-    }
-    None
+    regions.iter().rev().find(|region| !region.is_caret())
 }
 
 /// Counts the number of lines in the string, not including any trailing newline.
