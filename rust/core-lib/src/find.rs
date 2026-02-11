@@ -137,7 +137,7 @@ impl Find {
 
     pub fn update_highlights(&mut self, text: &Rope, delta: &RopeDelta) {
         // update search highlights for changed regions
-        if self.search_string.is_some() {
+        if let Some(ref search_string) = self.search_string {
             // invalidate occurrences around deletion positions
             for DeltaRegion { old_offset, len, .. } in delta.iter_deletions() {
                 self.occurrences.delete_range(old_offset, old_offset + len, false);
@@ -166,7 +166,7 @@ impl Find {
             };
 
             // invalidate all search results from the point of the last valid search result until ...
-            let is_multiline = LinesMetric::next(self.search_string.as_ref().unwrap(), 0).is_some();
+            let is_multiline = LinesMetric::next(search_string, 0).is_some();
 
             if is_multiline || self.is_multiline_regex() {
                 // ... the end of the file
