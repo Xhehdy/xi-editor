@@ -59,6 +59,7 @@ pub struct AgentManifest {
 }
 
 /// A loaded agent instance
+#[allow(dead_code)]
 pub struct Agent {
     pub manifest: AgentManifest,
     store: Store<WasiP1Ctx>,
@@ -93,7 +94,7 @@ impl AgentRuntime {
         manifest: AgentManifest,
         wasm_bytes: &[u8],
     ) -> Result<AgentId, AgentError> {
-        let module = Module::new(&self.engine, wasm_bytes)
+        let _module = Module::new(&self.engine, wasm_bytes)
             .map_err(|e| AgentError::LoadFailed(e.to_string()))?;
         
         let id = manifest.id.clone();
@@ -142,7 +143,7 @@ impl AgentRuntime {
         preview1::add_to_linker_sync(&mut linker, |ctx| ctx)
             .map_err(|e| AgentError::ExecutionFailed(e.to_string()))?;
         
-        let instance = linker.instantiate(&mut store, &module)
+        let _instance = linker.instantiate(&mut store, &module)
             .map_err(|e| AgentError::ExecutionFailed(e.to_string()))?;
         
         // Call the entry point
