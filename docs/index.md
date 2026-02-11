@@ -9,11 +9,11 @@ site_nav_category_order: 1
 
 <div class="mdl-grid docs-content-wrapper mdl-grid--no-spacing">
   <div class="mdl-cell mdl-cell--6-col">
-    <h1>Xi-Editor</h1>
-    <p><em>(pronounced "Zigh")</em></p>
+    <h1>Glyph</h1>
+    <p><em>(formerly Xi-Editor)</em></p>
 
-    <p>The xi editor project is an attempt to build a high quality text editor, using modern software engineering
-    techniques. It is initially built for macOS, using Cocoa for the user interface. There are also frontends for
+    <p>Glyph (formerly xi-editor) is a high-performance text editor core, using modern software engineering
+    techniques. It is built primarily in Rust, with frontends for macOS, Linux, Windows, and
     other operating systems available from third-party developers.</p>
 
     <p>Goals include:</p>
@@ -29,7 +29,7 @@ site_nav_category_order: 1
 
     <li><p><strong><em>Reliability</em></strong>. Crashing, hanging, or losing work should never happen.</p></li>
 
-    <li><p><strong><em>Developer friendliness</em></strong>. It should be easy to customize xi editor, whether
+    <li><p><strong><em>Developer friendliness</em></strong>. It should be easy to customize Glyph, whether
     by adding plug-ins or hacking on the core.</p></li>
     </ul>
 

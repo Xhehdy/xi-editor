@@ -1,6 +1,6 @@
 # Cortex IDE
 
-> An AI-native IDE built on Xi Editor principles. Performance-first, intelligence-second.
+> An AI-native IDE built on Glyph (formerly Xi Editor) principles. Performance-first, intelligence-second.
 
 ## Architecture
 
@@ -31,7 +31,7 @@ cargo run -p cortex-core
 
 | Crate | Purpose |
 |-------|---------|
-| `cortex-rope` | Rope data structure (forked from xi-rope) |
+| `cortex-rope` | Rope data structure (forked from glyph-rope) |
 | `cortex-buffer` | Text buffer management |
 | `cortex-patch` | Diff/patch computation |
 | `cortex-events` | Intent & editor events |
