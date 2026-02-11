@@ -1,6 +1,6 @@
 # Cortex IDE
 
-> An AI-native IDE built on Xi Editor principles. Performance-first, intelligence-second.
+> An AI-native IDE built on Glyph (formerly Xi Editor) principles. Performance-first, intelligence-second.
 
 ## Architecture
 

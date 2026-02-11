@@ -1,6 +1,6 @@
 # AI-NATIVE IDE — COMPREHENSIVE ARCHITECTURE
 
-> A performance-first, AI-native IDE built on **Xi Editor principles**, powered by a **Rust Core Engine**, designed for massive codebases, multi-agent intelligence, and long-term evolution.
+> A performance-first, AI-native IDE built on **Glyph (formerly Xi Editor) principles**, powered by a **Rust Core Engine**, designed for massive codebases, multi-agent intelligence, and long-term evolution.
 
 ---
 
@@ -13,7 +13,7 @@
 - Scales from solo dev → massive mono-repos
 - Human-in-the-loop always
 
-Xi-inspired principle:
+Glyph-inspired principle:
 > *The editor is a view. Intelligence lives elsewhere.*
 
 ---
@@ -23,7 +23,7 @@ Xi-inspired principle:
 ```
 UI Layer (Minimal, Reactive)
    ↓
-Editor Frontend (Xi-style thin client)
+Editor Frontend (Glyph-style thin client)
    ↓
 Intent & Orchestration Layer
    ↓
@@ -40,7 +40,7 @@ Rust Core Engine (Async, Concurrent)
 
 ## 3. UI & EDITOR LAYER
 
-### 3.1 Editor Core (Xi Architecture)
+### 3.1 Editor Core (Glyph Architecture)
 - No heavy DOM ownership
 - Editor is a *dumb renderer*
 - All logic lives in Rust core
@@ -249,7 +249,7 @@ Feels instant, always.
 
 ### Phase 1 — Foundation
 - Rust core
-- Xi-style editor loop
+- Glyph-style editor loop
 - Patch-based rendering
 
 ### Phase 2 — Intelligence
@@ -286,7 +286,7 @@ Just smarter.
   /agents      # Agent runtime
   /storage     # DB + memory
   /protocol    # Core <-> UI protocol
-  /ui          # Thin UI (Xi-style view)
+  /ui          # Thin UI (Glyph-style view)
 ```
 
 ### Core Crates
@@ -296,7 +296,7 @@ Just smarter.
 - `events` — intent & editor events
 - `protocol` — JSON / binary message spec
 
-### IPC Model (Xi-style)
+### IPC Model (Glyph-style)
 - UI sends intents → Core
 - Core sends patches → UI
 - No shared state
@@ -373,7 +373,7 @@ Edges:
 - Read-only agents by default
 - Incremental rollout
 
-### Xi Lessons
+### Glyph (Xi) Lessons
 - Separate view from logic (keep)
 - Avoid over-coupling plugins
 - Ship smaller, earlier

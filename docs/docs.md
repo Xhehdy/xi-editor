@@ -13,7 +13,7 @@ site_nav_category: docs
  - [The config system](docs/config.html)
  - CRDT Docs:
     - [The CRDT model](docs/crdt.html)
-    - [The Xi Text Engine](docs/crdt-details.html)
+    - [The Glyph Text Engine](docs/crdt-details.html)
     - [Using the Ledger for CRDTs](docs/fuchsia-ledger-crdts.html)
  - Rope Science:
     - [Introduction](docs/rope_science_00.html)

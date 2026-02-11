@@ -1,14 +1,17 @@
-# Xi editor
+# Glyph
 
-***Maintenance status:*** *The xi-editor project is currently discontinued. Although we will happily accept bug fixes, no new features are currently planned. You may be interested in [the Lapce editor](https://github.com/lapce/lapce), which can be considered a spiritual successor to the xi-editor.
-— The Editors
+*Formerly known as xi-editor — now reborn as **Glyph**.*
 
 ***Note:*** *This repo contains only the editor core, which is not usable on its own. For editors based on it, check out the list in [Frontends](#frontends).*
 
-The xi-editor project is an attempt to build a high quality text editor,
-using modern software engineering techniques. It is initially built for
-macOS, using Cocoa for the user interface. There are also frontends for
-other operating systems available from third-party developers.
+Glyph is a high-performance text editor core built with modern software
+engineering techniques. Originally created as xi-editor, the project has
+been renamed to **Glyph** to reflect its continued evolution. It is built
+primarily in Rust, with a frontend/backend architecture that allows
+frontends for macOS, Linux, Windows, and more.
+
+For an in-depth look at the architecture, performance characteristics, and
+scalability design, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Goals include:
 
@@ -16,21 +19,21 @@ Goals include:
   in under 16ms. The editor should never make you wait for anything.
 
 * ***Beauty***. The editor should fit well on a modern desktop, and not look like a
-  throwback from the ’80s or ’90s. Text drawing should be done with the best
+  throwback from the '80s or '90s. Text drawing should be done with the best
   technology available (Core Text on Mac, DirectWrite on Windows, etc.), and
   support Unicode fully.
 
 * ***Reliability***. Crashing, hanging, or losing work should never happen.
 
-* ***Developer friendliness***. It should be easy to customize xi editor, whether
+* ***Developer friendliness***. It should be easy to customize Glyph, whether
   by adding plug-ins or hacking on the core.
 
-**Learn more** with the creator of Xi, Raph Levien, in this [Recurse Center Localhost talk](https://www.recurse.com/events/localhost-raph-levien
+**Learn more** with the creator of Glyph (originally Xi), Raph Levien, in this [Recurse Center Localhost talk](https://www.recurse.com/events/localhost-raph-levien
 ).
 
 Screenshot:
 
-![xi-mac screenshot](/docs/docs/img/xi-mac-screenshot.png?raw=true)
+![glyph screenshot](/docs/docs/img/xi-mac-screenshot.png?raw=true)
 
 
 ## Getting started
@@ -41,10 +44,10 @@ below.
 
 ### Building the core
 
-Xi-editor targets 'recent stable Rust'. We recommend installing via [rustup](https://www.rustup.rs).
+Glyph targets 'recent stable Rust'. We recommend installing via [rustup](https://www.rustup.rs).
 The current minimum supported version is 1.40.
 
-To build the xi-editor core from the root directory of this repo:
+To build the Glyph core from the root directory of this repo:
 
 ```
 > cd rust
@@ -84,8 +87,7 @@ experimental GL-based front-end in Rust.
 
 * [xi-android](https://github.com/adrientetar/xi-android), an Android frontend.
 
-There are notes (I wouldn’t call it
-documentation at this point) on the protocol at
+There are notes on the protocol at
 [frontend.md](https://xi-editor.github.io/xi-editor/docs/frontend-protocol.html). If you're working on a front-end, feel free to
 send a PR to add it to the above list.
 
@@ -96,12 +98,12 @@ Here are some of the design decisions, and motivation why they should
 contribute to the above goals:
 
 * ***Separation into front-end and back-end modules***. The front-end is responsible for presenting the user interface and
-  drawing a screen full of text. The back-end (also known as “core”) holds the file buffers and is
+  drawing a screen full of text. The back-end (also known as "core") holds the file buffers and is
   responsible for all potentially expensive editing operations.
 
 * ***Native UI***. Cross-platform UI toolkits never look and feel quite right. The
   best technology for building a UI is the native framework of the platform.
-  On Mac, that’s Cocoa.
+  On Mac, that's Cocoa.
 
 * ***Rust***. The back-end needs to be extremely performant. In particular, it
   should use little more memory than the buffers being edited. That level of
@@ -122,7 +124,7 @@ contribute to the above goals:
 
 * ***Plug-ins over scripting***. Most text editors have an associated scripting
   language for extending functionality. However, these languages are usually
-  both more arcane and less powerful than “real” languages. The xi editor will
+  both more arcane and less powerful than "real" languages. Glyph will
   communicate with plugins through pipes, letting them be written in any
   language, and making it easier to integrate with other systems such as
   version control, deeper static analyzers of code, etc.
@@ -131,24 +133,22 @@ contribute to the above goals:
   between the back-end and plug-ins, is based on simple JSON messages. I
   considered binary formats, but the actual improvement in performance would
   be completely in the noise. Using JSON considerably lowers friction for
-  developing plug-ins, as it’s available out of the box for most modern
+  developing plug-ins, as it's available out of the box for most modern
   languages, and there are plenty of the libraries available for the other
   ones.
 
 
 ## Current status
 
-This is still a project in its early stages. The Mac build has basic editing
-functionality (it was used to write this README), but looks very spare and
-is still missing essentials such as auto-indent. At the moment, it’s expected
-that its main community will be developers interested in hacking on a text
-editor.
+Glyph is an actively evolving project. The core editor engine is production-ready
+with proven performance characteristics. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for a detailed analysis of the architecture, performance, and scalability.
 
 
 ## Authors
 
-The xi-editor project was started by Raph Levien but has since received
-contributions from a number of other people. See the [AUTHORS](AUTHORS)
+The Glyph project (formerly xi-editor) was started by Raph Levien and has since
+received contributions from a number of other people. See the [AUTHORS](AUTHORS)
 file for details.
 
 
@@ -161,8 +161,3 @@ This project is licensed under the Apache 2 [license](LICENSE).
 
 We gladly accept contributions via GitHub pull requests. Please see
 [CONTRIBUTING.md](.github/CONTRIBUTING.md) for more details.
-
-If you are interested in contributing but not sure where to start, there is an
-active Zulip channel at #xi-editor on https://xi.zulipchat.com. There is also
-a #xi channel on irc.mozilla.org. Finally, there is a subreddit at
-[/r/xi_editor](https://www.reddit.com/r/xi_editor/).
