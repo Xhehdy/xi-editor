@@ -76,6 +76,26 @@ pub struct HighlightSpan {
     pub highlight: String,
 }
 
+/// Stable protocol-level error categories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ErrorCode {
+    #[default]
+    Unknown,
+    InvalidRequest,
+    ViewNotFound,
+    BufferNotFound,
+    StaleRevision,
+    InvalidRange,
+    InvalidUtf8Boundary,
+    DeserializeFailed,
+    FrameTooLarge,
+    FileReadFailed,
+    LlmFailure,
+    CompletionTimeout,
+    IndexingFailed,
+}
+
 /// Messages sent from Core to UI
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CoreToUi {
@@ -116,7 +136,15 @@ pub enum CoreToUi {
     /// Core event notification
     Event(CoreEvent),
     /// Error response
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(default)]
+        code: ErrorCode,
+        #[serde(default)]
+        retryable: bool,
+        #[serde(default)]
+        should_resync: bool,
+    },
 }
 
 /// Symbol information for UI
@@ -241,6 +269,55 @@ mod tests {
                 inserted_text,
                 base_revision: 7,
             } if inserted_text == "hello"
+        ));
+    }
+
+    #[test]
+    fn test_error_roundtrip_with_metadata() {
+        let msg = CoreToUi::Error {
+            message: "stale revision".to_string(),
+            code: ErrorCode::StaleRevision,
+            retryable: true,
+            should_resync: true,
+        };
+
+        let bytes = serialize(&msg).unwrap();
+        let decoded: CoreToUi = deserialize(&bytes).unwrap();
+        assert!(matches!(
+            decoded,
+            CoreToUi::Error {
+                message,
+                code: ErrorCode::StaleRevision,
+                retryable: true,
+                should_resync: true,
+            } if message == "stale revision"
+        ));
+
+        let json_bytes = serialize_json(&msg).unwrap();
+        let json_decoded: CoreToUi = deserialize_json(&json_bytes).unwrap();
+        assert!(matches!(
+            json_decoded,
+            CoreToUi::Error {
+                message,
+                code: ErrorCode::StaleRevision,
+                retryable: true,
+                should_resync: true,
+            } if message == "stale revision"
+        ));
+    }
+
+    #[test]
+    fn test_legacy_error_defaults_metadata() {
+        let json = br#"{"Error":{"message":"legacy error"}}"#;
+        let decoded: CoreToUi = deserialize_json(json).unwrap();
+        assert!(matches!(
+            decoded,
+            CoreToUi::Error {
+                message,
+                code: ErrorCode::Unknown,
+                retryable: false,
+                should_resync: false,
+            } if message == "legacy error"
         ));
     }
 }

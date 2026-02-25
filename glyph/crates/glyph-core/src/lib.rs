@@ -11,7 +11,7 @@ use glyph_events::{CoreEvent, InputEvent, ViewId};
 use glyph_graph::CodeGraph;
 use glyph_llm::LlmClient;
 use glyph_patch::Patch;
-use glyph_protocol::{CoreToUi, SymbolInfo, UiToCore};
+use glyph_protocol::{CoreToUi, ErrorCode, SymbolInfo, UiToCore};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -103,6 +103,20 @@ impl Glyph {
             *revision = revision.saturating_add(1);
         }
         *revision
+    }
+
+    fn protocol_error(
+        code: ErrorCode,
+        message: impl Into<String>,
+        retryable: bool,
+        should_resync: bool,
+    ) -> CoreToUi {
+        CoreToUi::Error {
+            message: message.into(),
+            code,
+            retryable,
+            should_resync,
+        }
     }
 
     fn completion_prompt() -> &'static str {
@@ -241,9 +255,12 @@ impl Glyph {
                     match tokio::fs::read_to_string(p).await {
                         Ok(content) => content,
                         Err(e) => {
-                            return CoreToUi::Error {
-                                message: format!("Failed to open file '{}': {}", p, e),
-                            };
+                            return Self::protocol_error(
+                                ErrorCode::FileReadFailed,
+                                format!("Failed to open file '{}': {}", p, e),
+                                false,
+                                false,
+                            );
                         }
                     }
                 } else {
@@ -314,16 +331,22 @@ impl Glyph {
                 };
 
                 let Some(buffer_id) = buffer_id else {
-                    return CoreToUi::Error {
-                        message: format!("View {:?} not found", view_id),
-                    };
+                    return Self::protocol_error(
+                        ErrorCode::ViewNotFound,
+                        format!("View {:?} not found", view_id),
+                        false,
+                        false,
+                    );
                 };
 
                 let mut buffers = self.buffers.write().await;
                 let Some(buffer) = buffers.get_mut(&buffer_id) else {
-                    return CoreToUi::Error {
-                        message: format!("Buffer for view {:?} not found", view_id),
-                    };
+                    return Self::protocol_error(
+                        ErrorCode::BufferNotFound,
+                        format!("Buffer for view {:?} not found", view_id),
+                        false,
+                        true,
+                    );
                 };
 
                 let mut cursors = self.cursors.write().await;
@@ -337,9 +360,12 @@ impl Glyph {
                         let patch = match EditorCore::apply_insert(buffer, cursor, &text) {
                             Ok(patch) => patch,
                             Err(e) => {
-                                return CoreToUi::Error {
-                                    message: format!("Insert failed: {}", e),
-                                };
+                                return Self::protocol_error(
+                                    ErrorCode::InvalidRange,
+                                    format!("Insert failed: {}", e),
+                                    false,
+                                    true,
+                                );
                             }
                         };
                         let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -353,9 +379,12 @@ impl Glyph {
                         let patch = match EditorCore::apply_backspace(buffer, cursor) {
                             Ok(patch) => patch,
                             Err(e) => {
-                                return CoreToUi::Error {
-                                    message: format!("Backspace failed: {}", e),
-                                };
+                                return Self::protocol_error(
+                                    ErrorCode::InvalidRange,
+                                    format!("Backspace failed: {}", e),
+                                    false,
+                                    true,
+                                );
                             }
                         };
                         let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -369,9 +398,12 @@ impl Glyph {
                         let patch = match EditorCore::apply_delete(buffer, cursor) {
                             Ok(patch) => patch,
                             Err(e) => {
-                                return CoreToUi::Error {
-                                    message: format!("Delete failed: {}", e),
-                                };
+                                return Self::protocol_error(
+                                    ErrorCode::InvalidRange,
+                                    format!("Delete failed: {}", e),
+                                    false,
+                                    true,
+                                );
                             }
                         };
                         let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -399,9 +431,12 @@ impl Glyph {
                         let patch = match EditorCore::apply_undo(buffer, cursor) {
                             Ok(patch) => patch,
                             Err(e) => {
-                                return CoreToUi::Error {
-                                    message: format!("Undo failed: {}", e),
-                                };
+                                return Self::protocol_error(
+                                    ErrorCode::InvalidRange,
+                                    format!("Undo failed: {}", e),
+                                    false,
+                                    true,
+                                );
                             }
                         };
                         let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -415,9 +450,12 @@ impl Glyph {
                         let patch = match EditorCore::apply_redo(buffer, cursor) {
                             Ok(patch) => patch,
                             Err(e) => {
-                                return CoreToUi::Error {
-                                    message: format!("Redo failed: {}", e),
-                                };
+                                return Self::protocol_error(
+                                    ErrorCode::InvalidRange,
+                                    format!("Redo failed: {}", e),
+                                    false,
+                                    true,
+                                );
                             }
                         };
                         let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -453,40 +491,52 @@ impl Glyph {
                 };
 
                 let Some(buffer_id) = buffer_id else {
-                    return CoreToUi::Error {
-                        message: format!("View {:?} not found", view_id),
-                    };
+                    return Self::protocol_error(
+                        ErrorCode::ViewNotFound,
+                        format!("View {:?} not found", view_id),
+                        false,
+                        false,
+                    );
                 };
 
                 let end = match start.checked_add(deleted_len) {
                     Some(end) => end,
                     None => {
-                        return CoreToUi::Error {
-                            message: format!(
+                        return Self::protocol_error(
+                            ErrorCode::InvalidRequest,
+                            format!(
                                 "ApplyEdit failed: range overflow for start={} deleted_len={}",
                                 start, deleted_len
                             ),
-                        };
+                            false,
+                            false,
+                        );
                     }
                 };
 
                 let mut buffers = self.buffers.write().await;
                 let Some(buffer) = buffers.get_mut(&buffer_id) else {
-                    return CoreToUi::Error {
-                        message: format!("Buffer for view {:?} not found", view_id),
-                    };
+                    return Self::protocol_error(
+                        ErrorCode::BufferNotFound,
+                        format!("Buffer for view {:?} not found", view_id),
+                        false,
+                        true,
+                    );
                 };
 
                 let mut cursors = self.cursors.write().await;
                 let mut revisions = self.revisions.write().await;
                 let revision = revisions.entry(buffer_id).or_insert(0);
                 if base_revision != *revision {
-                    return CoreToUi::Error {
-                        message: format!(
+                    return Self::protocol_error(
+                        ErrorCode::StaleRevision,
+                        format!(
                             "ApplyEdit failed: stale revision base={} current={}",
                             base_revision, *revision
                         ),
-                    };
+                        true,
+                        true,
+                    );
                 }
 
                 let patch = match EditorCore::apply_range_edit(
@@ -497,9 +547,12 @@ impl Glyph {
                 ) {
                     Ok(patch) => patch,
                     Err(e) => {
-                        return CoreToUi::Error {
-                            message: format!("ApplyEdit failed: {}", e),
-                        };
+                        return Self::protocol_error(
+                            ErrorCode::InvalidRange,
+                            format!("ApplyEdit failed: {}", e),
+                            false,
+                            true,
+                        );
                     }
                 };
                 let revision = Self::advance_revision_if_changed(revision, &patch);
@@ -549,9 +602,12 @@ impl Glyph {
                     }
                 }
 
-                CoreToUi::Error {
-                    message: format!("View {:?} not found", view_id),
-                }
+                Self::protocol_error(
+                    ErrorCode::ViewNotFound,
+                    format!("View {:?} not found", view_id),
+                    false,
+                    false,
+                )
             }
 
             UiToCore::Chat {
@@ -573,9 +629,12 @@ impl Glyph {
                         token: response,
                         done: true,
                     },
-                    Err(e) => CoreToUi::Error {
-                        message: format!("AI Error: {}", e),
-                    },
+                    Err(e) => Self::protocol_error(
+                        ErrorCode::LlmFailure,
+                        format!("AI Error: {}", e),
+                        true,
+                        false,
+                    ),
                 }
             }
 
@@ -586,17 +645,23 @@ impl Glyph {
                 };
 
                 let Some(buffer_id) = buffer_id else {
-                    return CoreToUi::Error {
-                        message: format!("View {:?} not found", view_id),
-                    };
+                    return Self::protocol_error(
+                        ErrorCode::ViewNotFound,
+                        format!("View {:?} not found", view_id),
+                        false,
+                        false,
+                    );
                 };
 
                 let (content, cursor) = {
                     let buffers = self.buffers.read().await;
                     let Some(buffer) = buffers.get(&buffer_id) else {
-                        return CoreToUi::Error {
-                            message: format!("Buffer for view {:?} not found", view_id),
-                        };
+                        return Self::protocol_error(
+                            ErrorCode::BufferNotFound,
+                            format!("Buffer for view {:?} not found", view_id),
+                            false,
+                            true,
+                        );
                     };
                     let cursor = buffer.nearest_char_boundary(position.min(buffer.len()));
                     (buffer.content(), cursor)
@@ -612,11 +677,21 @@ impl Glyph {
                     Ok(Ok(raw)) => Self::sanitize_ghost_text(&raw),
                     Ok(Err(err)) => {
                         warn!("completion request failed for view {:?}: {}", view_id, err);
-                        String::new()
+                        return Self::protocol_error(
+                            ErrorCode::LlmFailure,
+                            format!("Completion failed: {}", err),
+                            true,
+                            false,
+                        );
                     }
                     Err(_) => {
                         warn!("completion request timed out for view {:?}", view_id);
-                        String::new()
+                        return Self::protocol_error(
+                            ErrorCode::CompletionTimeout,
+                            "Completion request timed out",
+                            true,
+                            false,
+                        );
                     }
                 };
 
@@ -631,9 +706,12 @@ impl Glyph {
                 let content = match tokio::fs::read_to_string(&path).await {
                     Ok(c) => c,
                     Err(e) => {
-                        return CoreToUi::Error {
-                            message: format!("Failed to read file: {}", e),
-                        };
+                        return Self::protocol_error(
+                            ErrorCode::FileReadFailed,
+                            format!("Failed to read file: {}", e),
+                            false,
+                            false,
+                        );
                     }
                 };
 
@@ -657,9 +735,12 @@ impl Glyph {
                             symbol_count: symbol_ids.len(),
                         }
                     }
-                    Err(e) => CoreToUi::Error {
-                        message: format!("Indexing failed: {}", e),
-                    },
+                    Err(e) => Self::protocol_error(
+                        ErrorCode::IndexingFailed,
+                        format!("Indexing failed: {}", e),
+                        false,
+                        false,
+                    ),
                 }
             }
 
@@ -728,6 +809,15 @@ mod tests {
     async fn get_content(glyph: &Glyph, view_id: ViewId) -> String {
         match glyph.handle_message(UiToCore::GetContent { view_id }).await {
             CoreToUi::SetContent { content, .. } => content,
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    async fn get_content_with_revision(glyph: &Glyph, view_id: ViewId) -> (String, u64) {
+        match glyph.handle_message(UiToCore::GetContent { view_id }).await {
+            CoreToUi::SetContent {
+                content, revision, ..
+            } => (content, revision),
             other => panic!("unexpected response: {:?}", other),
         }
     }
@@ -873,7 +963,147 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(response, CoreToUi::Error { .. }));
+        assert!(matches!(
+            response,
+            CoreToUi::Error {
+                code: ErrorCode::StaleRevision,
+                retryable: true,
+                should_resync: true,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_apply_edit_replay_rejected_with_stale_revision() {
+        let glyph = Glyph::new();
+        let view_id = create_view(&glyph).await;
+
+        let first = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 0,
+                deleted_len: 0,
+                inserted_text: "x".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(first, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        let replay = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 0,
+                deleted_len: 0,
+                inserted_text: "x".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(
+            replay,
+            CoreToUi::Error {
+                code: ErrorCode::StaleRevision,
+                retryable: true,
+                should_resync: true,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_out_of_order_apply_edit_requires_resync_then_succeeds() {
+        let glyph = Glyph::new();
+        let view_id = create_view(&glyph).await;
+
+        let first = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 0,
+                deleted_len: 0,
+                inserted_text: "abc".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(first, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        let second = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 1,
+                deleted_len: 1,
+                inserted_text: "Z".to_string(),
+                base_revision: 1,
+            })
+            .await;
+        assert!(matches!(second, CoreToUi::ApplyPatch { revision: 2, .. }));
+
+        let out_of_order = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 2,
+                deleted_len: 1,
+                inserted_text: "Y".to_string(),
+                base_revision: 1,
+            })
+            .await;
+        assert!(matches!(
+            out_of_order,
+            CoreToUi::Error {
+                code: ErrorCode::StaleRevision,
+                retryable: true,
+                should_resync: true,
+                ..
+            }
+        ));
+
+        let (content, revision) = get_content_with_revision(&glyph, view_id).await;
+        assert_eq!(content, "aZc");
+        assert_eq!(revision, 2);
+
+        let recovered = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 2,
+                deleted_len: 1,
+                inserted_text: "Y".to_string(),
+                base_revision: revision,
+            })
+            .await;
+        assert!(matches!(
+            recovered,
+            CoreToUi::ApplyPatch { revision: 3, .. }
+        ));
+
+        let final_content = get_content(&glyph, view_id).await;
+        assert_eq!(final_content, "aZY");
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_hello_does_not_reset_view_revision_state() {
+        let glyph = Glyph::new();
+        let view_id = create_view(&glyph).await;
+
+        let edit = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 0,
+                deleted_len: 0,
+                inserted_text: "state".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(edit, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        let hello = glyph
+            .handle_message(UiToCore::Hello {
+                client_version: "reconnect-test".to_string(),
+                capabilities: None,
+            })
+            .await;
+        assert!(matches!(hello, CoreToUi::Welcome { .. }));
+
+        let (_, revision) = get_content_with_revision(&glyph, view_id).await;
+        assert_eq!(revision, 1);
     }
 
     #[tokio::test]

@@ -67,7 +67,7 @@ struct GlyphTests {
 
         #expect(viewId == 42)
         #expect(revision == 7)
-        let patched = try patch.apply(to: "Hello Cortex")
+        let patched = try patch.apply(to: "Hello Legacy")
         #expect(patched == "Hello Glyph")
     }
 
@@ -96,5 +96,37 @@ struct GlyphTests {
         } catch {
             Issue.record("Expected PatchApplyError, got \(error)")
         }
+    }
+
+    @Test func coreErrorDecodesLegacyPayloadWithDefaults() throws {
+        let payload = #"{"Error":{"message":"legacy"}}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(CoreToUi.self, from: payload)
+
+        guard case .error(let message, let code, let retryable, let shouldResync) = decoded else {
+            Issue.record("Expected Error variant")
+            return
+        }
+
+        #expect(message == "legacy")
+        #expect(code == .unknown)
+        #expect(retryable == false)
+        #expect(shouldResync == false)
+    }
+
+    @Test func coreErrorDecodesMetadata() throws {
+        let payload = #"""
+        {"Error":{"message":"stale revision","code":"STALE_REVISION","retryable":true,"should_resync":true}}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(CoreToUi.self, from: payload)
+
+        guard case .error(let message, let code, let retryable, let shouldResync) = decoded else {
+            Issue.record("Expected Error variant")
+            return
+        }
+
+        #expect(message == "stale revision")
+        #expect(code == .staleRevision)
+        #expect(retryable == true)
+        #expect(shouldResync == true)
     }
 }

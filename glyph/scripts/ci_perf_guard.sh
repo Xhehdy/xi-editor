@@ -34,7 +34,7 @@ echo "Building glyph core release binary for IPC benchmark..."
 "$CARGO_BIN" build -p glyph-core --release
 
 echo "Running IPC benchmark..."
-IPC_RESULTS="$(mktemp /tmp/glyph_ipc_bench.XXXXXX.json)"
+IPC_RESULTS="$(mktemp -t glyph_ipc_bench)"
 python3 scripts/bench_ipc_apply_edit.py \
   --spawn-core \
   --core-binary target/release/glyph \

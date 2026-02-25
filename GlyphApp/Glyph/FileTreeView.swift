@@ -12,15 +12,40 @@ struct FileTreeView: View {
     let rootPath: String
     @Binding var selectedPath: String?
     @State private var expandedPaths: Set<String> = []
+    @State private var showHiddenFiles = false
 
     var body: some View {
-        List {
-            FileNodeView(path: rootPath,
-                        isRoot: true,
-                        selectedPath: $selectedPath,
-                        expandedPaths: $expandedPaths)
+        VStack(spacing: 0) {
+            HStack {
+                Text(URL(fileURLWithPath: rootPath).lastPathComponent)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                Spacer()
+                Button {
+                    showHiddenFiles.toggle()
+                } label: {
+                    Image(systemName: showHiddenFiles ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.plain)
+                .help(showHiddenFiles ? "Hide hidden files" : "Show hidden files")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(NSColor.controlBackgroundColor))
+
+            List {
+                FileNodeView(
+                    path: rootPath,
+                    isRoot: true,
+                    selectedPath: $selectedPath,
+                    expandedPaths: $expandedPaths,
+                    showHiddenFiles: showHiddenFiles
+                )
+                .id("root-\(showHiddenFiles)")
+            }
+            .listStyle(.sidebar)
         }
-        .listStyle(.sidebar)
     }
 }
 
@@ -29,6 +54,7 @@ struct FileNodeView: View {
     let isRoot: Bool
     @Binding var selectedPath: String?
     @Binding var expandedPaths: Set<String>
+    let showHiddenFiles: Bool
 
     @State private var children: [String]?
 
@@ -42,7 +68,13 @@ struct FileNodeView: View {
             // Usually we show the folder name if it's a project
             if let children = children {
                 ForEach(children, id: \.self) { childPath in
-                    FileNodeView(path: childPath, isRoot: false, selectedPath: $selectedPath, expandedPaths: $expandedPaths)
+                    FileNodeView(
+                        path: childPath,
+                        isRoot: false,
+                        selectedPath: $selectedPath,
+                        expandedPaths: $expandedPaths,
+                        showHiddenFiles: showHiddenFiles
+                    )
                 }
             } else {
                 ProgressView()
@@ -83,7 +115,13 @@ struct FileNodeView: View {
 
                 if isExpanded, let children = children {
                     ForEach(children, id: \.self) { childPath in
-                        FileNodeView(path: childPath, isRoot: false, selectedPath: $selectedPath, expandedPaths: $expandedPaths)
+                        FileNodeView(
+                            path: childPath,
+                            isRoot: false,
+                            selectedPath: $selectedPath,
+                            expandedPaths: $expandedPaths,
+                            showHiddenFiles: showHiddenFiles
+                        )
                             .padding(.leading, 16)
                     }
                 }
@@ -130,16 +168,26 @@ struct FileNodeView: View {
 
         do {
             let items = try FileManager.default.contentsOfDirectory(atPath: path)
-            children = items.map { (path as NSString).appendingPathComponent($0) }
+            let ignoredNames: Set<String> = [".git", "target", ".build", "DerivedData", "node_modules"]
+            let filtered = items.filter { item in
+                if ignoredNames.contains(item) {
+                    return false
+                }
+                if !showHiddenFiles && item.hasPrefix(".") {
+                    return false
+                }
+                return true
+            }
+            children = filtered.map { (path as NSString).appendingPathComponent($0) }
                 .sorted { p1, p2 in
                     // Folders first
                     let d1 = dirCheck(p1)
                     let d2 = dirCheck(p2)
                     if d1 != d2 { return d1 }
-                    return p1 < p2
+                    return p1.localizedCaseInsensitiveCompare(p2) == .orderedAscending
                 }
         } catch {
-            print("Failed to list directory: \(error)")
+            children = []
         }
     }
 

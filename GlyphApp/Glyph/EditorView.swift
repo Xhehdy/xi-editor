@@ -16,11 +16,13 @@ struct EditorView: View {
     @State private var viewId: UInt64?
     @State private var isLoading = true
     @State private var errorMessage: String?
+    @State private var inlineErrorMessage: String?
     @State private var ghostText: String?
     @State private var cursorByteOffset = 0
     @State private var editPipeline: Task<Void, Never>?
     @State private var ghostTask: Task<Void, Never>?
     @State private var latestEditVersion: UInt64 = 0
+    @State private var isSyncing = false
 
     let filePath: String?
 
@@ -73,7 +75,19 @@ struct EditorView: View {
                         } else {
                             Text("Untitled")
                         }
+                        if isSyncing {
+                            Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        if let inlineErrorMessage {
+                            Text(inlineErrorMessage)
+                                .lineLimit(1)
+                                .foregroundColor(.red)
+                        }
                         Spacer()
+                        Text(client.connectionStatus.rawValue)
+                            .foregroundColor(client.isConnected ? .green : .orange)
                         if let version = client.coreVersion {
                             Text("Core v\(version)")
                         }
@@ -107,6 +121,7 @@ struct EditorView: View {
     private func connectAndLoad() async {
         isLoading = true
         errorMessage = nil
+        inlineErrorMessage = nil
         ghostText = nil
 
         if !client.isConnected {
@@ -122,17 +137,9 @@ struct EditorView: View {
         do {
             let (id, initialContent) = try await client.newView(path: filePath)
             viewId = id
-
-            if let (content, loadedSpans) = try? await client.getContent(viewId: id) {
-                text = content
-                spans = loadedSpans
-                cursorByteOffset = content.utf8.count
-            } else {
-                // Fallback to view-created payload if content fetch fails.
-                text = initialContent
-                spans = []
-                cursorByteOffset = initialContent.utf8.count
-            }
+            text = initialContent
+            spans = []
+            cursorByteOffset = initialContent.utf8.count
 
             if let path = filePath {
                 try? await client.indexFile(path: path)
@@ -162,6 +169,10 @@ struct EditorView: View {
             let previousTask = editPipeline
             let baseContent = previousText
             editPipeline = Task {
+                await MainActor.run {
+                    isSyncing = true
+                    inlineErrorMessage = nil
+                }
                 await previousTask?.value
                 do {
                     let authoritativeText = try await client.applyEdit(
@@ -176,10 +187,12 @@ struct EditorView: View {
                         if text != authoritativeText {
                             text = authoritativeText
                         }
+                        isSyncing = false
                     }
                 } catch {
                     await MainActor.run {
-                        errorMessage = error.localizedDescription
+                        inlineErrorMessage = error.localizedDescription
+                        isSyncing = false
                     }
                 }
             }

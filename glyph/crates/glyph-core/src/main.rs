@@ -5,7 +5,7 @@
 use glyph_core::Glyph;
 use glyph_events::CoreEvent;
 use glyph_protocol::{
-    deserialize, deserialize_json, serialize, serialize_json, CoreToUi, UiToCore,
+    deserialize, deserialize_json, serialize, serialize_json, CoreToUi, ErrorCode, UiToCore,
 };
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -135,10 +135,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let _ = write_response(
                                 &mut stream,
                                 &CoreToUi::Error {
+                                    code: ErrorCode::FrameTooLarge,
                                     message: format!(
                                         "Invalid message size: {} bytes (max {})",
                                         len, MAX_MESSAGE_SIZE
                                     ),
+                                    retryable: false,
+                                    should_resync: false,
                                 },
                                 response_format,
                             )
@@ -181,7 +184,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let _ = write_response(
                                     &mut stream,
                                     &CoreToUi::Error {
+                                        code: ErrorCode::DeserializeFailed,
                                         message: "Failed to deserialize message".to_string(),
+                                        retryable: false,
+                                        should_resync: false,
                                     },
                                     response_format,
                                 )

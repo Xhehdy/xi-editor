@@ -27,12 +27,24 @@ struct ChatView: View {
     @State private var inputText: String = ""
     @State private var isTyping = false
 
+    private var canSend: Bool {
+        client.isConnected &&
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !isTyping
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header
             HStack {
                 Text("AI Assistant")
                     .font(.headline)
+                Text(client.isConnected ? "Connected" : "Disconnected")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(client.isConnected ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
+                    .clipShape(Capsule())
                 Spacer()
                 if isTyping {
                     ProgressView()
@@ -41,6 +53,15 @@ struct ChatView: View {
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
+
+            if let error = client.lastError, !error.isEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+            }
 
             // Message List
             ScrollViewReader { proxy in
@@ -63,37 +84,41 @@ struct ChatView: View {
 
             // Input Area
             VStack(spacing: 8) {
-                if !inputText.isEmpty {
-                    HStack {
-                        Spacer()
-                        Button(action: sendMessage) {
-                            Image(systemName: "arrow.up.circle.fill")
-                                .font(.system(size: 24))
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.accentColor)
-                    }
-                }
+                HStack(alignment: .bottom, spacing: 8) {
+                    TextEditor(text: $inputText)
+                        .font(.body)
+                        .frame(minHeight: 40, maxHeight: 100)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(4)
+                        .background(Color(NSColor.textBackgroundColor))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                        )
+                        .disabled(!client.isConnected || isTyping)
 
-                TextEditor(text: $inputText)
-                    .font(.body)
-                    .frame(minHeight: 40, maxHeight: 100)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(4)
-                    .background(Color(NSColor.textBackgroundColor))
-                    .cornerRadius(8)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
-                    )
+                    Button(action: sendMessage) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 24))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundColor(canSend ? .accentColor : .secondary)
+                    .disabled(!canSend)
+                }
             }
             .padding()
             .background(Color(NSColor.controlBackgroundColor))
         }
+        .task {
+            if !client.isConnected {
+                await client.connect()
+            }
+        }
     }
 
     private func sendMessage() {
-        guard !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard canSend else { return }
 
         let userMsg = inputText
         messages.append(ChatMessage(text: userMsg, isUser: true))
@@ -102,6 +127,17 @@ struct ChatView: View {
 
         Task {
             do {
+                if !client.isConnected {
+                    await client.connect()
+                }
+                guard client.isConnected else {
+                    await MainActor.run {
+                        messages.append(ChatMessage(text: "Error: Core is not connected.", isUser: false))
+                        isTyping = false
+                    }
+                    return
+                }
+
                 // Mock context
                 let responseText = try await client.chat(userMsg, contextFiles: [])
 

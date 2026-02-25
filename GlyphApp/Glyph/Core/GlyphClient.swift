@@ -16,6 +16,7 @@ final class GlyphClient: ObservableObject {
     private let decoder = JSONDecoder()
     private let ioQueue = DispatchQueue(label: "com.glyph.core-connection.io")
     private var viewRevisions: [UInt64: UInt64] = [:]
+    private var managedCoreProcess: Process?
 
     @Published private(set) var isConnected = false
     @Published private(set) var coreVersion: String?
@@ -40,30 +41,19 @@ final class GlyphClient: ObservableObject {
         viewRevisions.removeAll()
 
         do {
-            try await runIO { [self] in
-                try self.connection.connect()
-            }
-
-            let response = try await send(
-                .hello(
-                    clientVersion: "1.0.0",
-                    capabilities: ClientCapabilities(patchStreaming: true)
-                )
-            )
-            guard case .welcome(let version) = response else {
-                throw CoreConnectionError.invalidResponse
-            }
-
-            coreVersion = version
-            isConnected = true
-            connectionStatus = .connected
+            try await connectAndHandshake()
         } catch {
-            try? await runIO { [self] in
-                self.connection.disconnect()
+            if shouldAttemptAutoLaunch(after: error), await launchCoreIfAvailable() {
+                await waitForCoreSocket(timeoutSeconds: 3.0)
+                do {
+                    try await connectAndHandshake()
+                    return
+                } catch let retryError {
+                    await failConnection(retryError)
+                    return
+                }
             }
-            lastError = error.localizedDescription
-            connectionStatus = .error
-            isConnected = false
+            await failConnection(error)
         }
     }
 
@@ -122,12 +112,11 @@ final class GlyphClient: ObservableObject {
                 viewId: viewId,
                 currentContent: baseContent
             )
-        } catch {
-            // If edit application desynchronizes client/server content, recover by full refresh.
+        } catch let protocolError as CoreProtocolError where protocolError.shouldResync {
             if let (content, _) = try? await getContent(viewId: viewId) {
                 return content
             }
-            throw error
+            throw protocolError
         }
     }
 
@@ -162,11 +151,23 @@ final class GlyphClient: ObservableObject {
 
     /// Request inline completion
     func requestCompletion(viewId: UInt64, position: Int) async throws -> String {
-        let response = try await send(.requestCompletion(viewId: viewId, position: position))
-        guard case .ghostText(_, let text) = response else {
-            throw errorFrom(response: response)
+        for attempt in 0..<2 {
+            do {
+                let response = try await send(.requestCompletion(viewId: viewId, position: position))
+                guard case .ghostText(_, let text) = response else {
+                    throw errorFrom(response: response)
+                }
+                return text
+            } catch let protocolError as CoreProtocolError {
+                let canRetry = protocolError.retryable && protocolError.code == .completionTimeout
+                if canRetry && attempt == 0 {
+                    try await Task.sleep(nanoseconds: 75_000_000)
+                    continue
+                }
+                throw protocolError
+            }
         }
-        return text
+        throw CoreConnectionError.invalidResponse
     }
 
     /// Index a file
@@ -203,7 +204,7 @@ final class GlyphClient: ObservableObject {
         }
 
         let response = try decoder.decode(CoreToUi.self, from: responseData)
-        if case .error(let msg) = response {
+        if case .error(let msg, _, _, _) = response {
             lastError = msg
         }
 
@@ -246,10 +247,11 @@ final class GlyphClient: ObservableObject {
                 }
                 return currentContent
             case .error(let message):
-                throw NSError(
-                    domain: "GlyphClient",
-                    code: 2,
-                    userInfo: [NSLocalizedDescriptionKey: message]
+                throw CoreProtocolError(
+                    code: .unknown,
+                    message: message,
+                    retryable: false,
+                    shouldResync: false
                 )
             case .suggestionReady:
                 return currentContent
@@ -260,11 +262,12 @@ final class GlyphClient: ObservableObject {
             }
             viewRevisions[responseViewId] = revision
             return content
-        case .error(let message):
-            throw NSError(
-                domain: "GlyphClient",
-                code: 3,
-                userInfo: [NSLocalizedDescriptionKey: message]
+        case .error(let message, let code, let retryable, let shouldResync):
+            throw CoreProtocolError(
+                code: code,
+                message: message,
+                retryable: retryable,
+                shouldResync: shouldResync
             )
         default:
             throw CoreConnectionError.invalidResponse
@@ -284,12 +287,134 @@ final class GlyphClient: ObservableObject {
     }
 
     private func errorFrom(response: CoreToUi) -> Error {
-        if case .error(let message) = response {
-            return NSError(domain: "GlyphClient", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        if case .error(let message, let code, let retryable, let shouldResync) = response {
+            return CoreProtocolError(
+                code: code,
+                message: message,
+                retryable: retryable,
+                shouldResync: shouldResync
+            )
         }
         return CoreConnectionError.invalidResponse
     }
+
+    private func connectAndHandshake() async throws {
+        try await runIO { [self] in
+            try self.connection.connect()
+        }
+
+        let response = try await send(
+            .hello(
+                clientVersion: "1.0.0",
+                capabilities: ClientCapabilities(patchStreaming: true)
+            )
+        )
+        guard case .welcome(let version) = response else {
+            throw CoreConnectionError.invalidResponse
+        }
+
+        coreVersion = version
+        isConnected = true
+        connectionStatus = .connected
+    }
+
+    private func failConnection(_ error: Error) async {
+        try? await runIO { [self] in
+            self.connection.disconnect()
+        }
+        coreVersion = nil
+        lastError = error.localizedDescription
+        connectionStatus = .error
+        isConnected = false
+    }
+
+    private func shouldAttemptAutoLaunch(after error: Error) -> Bool {
+        guard let coreError = error as? CoreConnectionError else {
+            return false
+        }
+
+        switch coreError {
+        case .connectionFailed, .notConnected:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func launchCoreIfAvailable() async -> Bool {
+        guard let executableURL = Self.resolveCoreExecutableURL() else {
+            return false
+        }
+
+        do {
+            try await runIO { [self] in
+                if let process = managedCoreProcess, process.isRunning {
+                    return
+                }
+
+                let process = Process()
+                process.executableURL = executableURL
+                process.arguments = []
+                let outputPipe = Pipe()
+                process.standardOutput = outputPipe
+                process.standardError = outputPipe
+                try process.run()
+                managedCoreProcess = process
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func waitForCoreSocket(timeoutSeconds: TimeInterval) async {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if FileManager.default.fileExists(atPath: "/tmp/glyph.sock") {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    private static func resolveCoreExecutableURL() -> URL? {
+        var candidates: [URL] = []
+
+        if let envPath = ProcessInfo.processInfo.environment["GLYPH_CORE_BIN"], !envPath.isEmpty {
+            candidates.append(URL(fileURLWithPath: envPath))
+        }
+
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        candidates.append(cwd.appendingPathComponent("glyph/target/debug/glyph"))
+        candidates.append(cwd.appendingPathComponent("glyph/target/release/glyph"))
+        candidates.append(cwd.appendingPathComponent("../glyph/target/debug/glyph"))
+        candidates.append(cwd.appendingPathComponent("../glyph/target/release/glyph"))
+
+        let sourceFile = URL(fileURLWithPath: #filePath)
+        let repoRoot = sourceFile
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        candidates.append(repoRoot.appendingPathComponent("glyph/target/debug/glyph"))
+        candidates.append(repoRoot.appendingPathComponent("glyph/target/release/glyph"))
+
+        for candidate in candidates {
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
 }
 
-/// Compatibility alias during Cortex -> Glyph migration.
-typealias CortexClient = GlyphClient
+struct CoreProtocolError: Error, LocalizedError {
+    let code: CoreErrorCode
+    let message: String
+    let retryable: Bool
+    let shouldResync: Bool
+
+    var errorDescription: String? {
+        "[\(code.rawValue)] \(message)"
+    }
+}

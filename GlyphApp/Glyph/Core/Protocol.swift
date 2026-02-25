@@ -255,6 +255,32 @@ struct SymbolInfo: Codable, Sendable, Identifiable {
     var id: String { "\(file):\(line):\(name)" }
 }
 
+enum CoreErrorCode: String, Codable, Sendable {
+    case unknown = "UNKNOWN"
+    case invalidRequest = "INVALID_REQUEST"
+    case viewNotFound = "VIEW_NOT_FOUND"
+    case bufferNotFound = "BUFFER_NOT_FOUND"
+    case staleRevision = "STALE_REVISION"
+    case invalidRange = "INVALID_RANGE"
+    case invalidUtf8Boundary = "INVALID_UTF8_BOUNDARY"
+    case deserializeFailed = "DESERIALIZE_FAILED"
+    case frameTooLarge = "FRAME_TOO_LARGE"
+    case fileReadFailed = "FILE_READ_FAILED"
+    case llmFailure = "LLM_FAILURE"
+    case completionTimeout = "COMPLETION_TIMEOUT"
+    case indexingFailed = "INDEXING_FAILED"
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CoreErrorCode(rawValue: raw) ?? .unknown
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
 /// Messages sent from Core to UI (matches Rust CoreToUi enum)
 enum CoreToUi: Codable, Sendable {
     case welcome(coreVersion: String)
@@ -267,13 +293,14 @@ enum CoreToUi: Codable, Sendable {
     case fileIndexed(path: String, symbolCount: Int)
     case symbols(symbols: [SymbolInfo])
     case event(CoreEvent)
-    case error(message: String)
+    case error(message: String, code: CoreErrorCode, retryable: Bool, shouldResync: Bool)
 
     private enum CodingKeys: String, CodingKey {
         case Welcome, ViewCreated, ApplyPatch, ApplyHighlights, SetContent, ChatToken, GhostText
         case FileIndexed, Symbols, Event, Error
         case core_version, view_id, content, patch, spans, token, done, text, message, symbols
         case path, symbol_count, revision
+        case code, retryable, should_resync
     }
 
     init(from decoder: Decoder) throws {
@@ -322,7 +349,15 @@ enum CoreToUi: Codable, Sendable {
             self = .event(event)
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Error) {
             let message = try nested.decode(String.self, forKey: .message)
-            self = .error(message: message)
+            let code = try nested.decodeIfPresent(CoreErrorCode.self, forKey: .code) ?? .unknown
+            let retryable = try nested.decodeIfPresent(Bool.self, forKey: .retryable) ?? false
+            let shouldResync = try nested.decodeIfPresent(Bool.self, forKey: .should_resync) ?? false
+            self = .error(
+                message: message,
+                code: code,
+                retryable: retryable,
+                shouldResync: shouldResync
+            )
         } else {
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Unknown response type"))
         }
@@ -371,9 +406,12 @@ enum CoreToUi: Codable, Sendable {
             try nested.encode(symbols, forKey: .symbols)
         case .event(let event):
             try container.encode(event, forKey: .Event)
-        case .error(let message):
+        case .error(let message, let code, let retryable, let shouldResync):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Error)
             try nested.encode(message, forKey: .message)
+            try nested.encode(code, forKey: .code)
+            try nested.encode(retryable, forKey: .retryable)
+            try nested.encode(shouldResync, forKey: .should_resync)
         }
     }
 }

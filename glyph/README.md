@@ -5,13 +5,13 @@
 ## Architecture
 
 ```
-UI Layer (Tauri)
-    ↓ Unix Sockets + MessagePack
+UI Layer (SwiftUI / macOS)
+    ↓ Unix Sockets + MessagePack-framed payloads
 Editor Core (Rust)
     ↓
-Comprehension Engine (Phase 2)
+Comprehension Engine
     ↓
-Agent Runtime / WASM (Phase 2)
+Agent Runtime / WASM
 ```
 
 ## Quick Start
@@ -23,8 +23,11 @@ cargo build --workspace
 # Run tests
 cargo test --workspace
 
-# Run the core (when ready)
+# Run the core
 cargo run -p glyph-core
+
+# Run performance guardrails
+bash scripts/ci_perf_guard.sh
 ```
 
 ## Crates
@@ -38,6 +41,25 @@ cargo run -p glyph-core
 | `glyph-protocol` | IPC message definitions |
 | `glyph-scheduler` | Async task orchestration |
 | `glyph-core` | Main coordinator |
+
+## IPC Contract Guarantees
+
+`glyph-protocol` provides a versioned, typed message contract for core/ui IPC:
+
+- UTF-8 byte-offset edits with revision checks (`base_revision` / `revision`)
+- Stable error classification (`Error.code`) with recovery hints:
+  - `retryable`
+  - `should_resync`
+- MessagePack and JSON helper support for compatibility/testing
+
+## Release
+
+```bash
+bash scripts/release_preflight.sh
+```
+
+- Release notes: [`RELEASE_NOTES.md`](./RELEASE_NOTES.md)
+- Changelog: [`CHANGELOG.md`](./CHANGELOG.md)
 
 ## Philosophy
 

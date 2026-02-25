@@ -22,6 +22,14 @@ struct ContentView: View {
         case files, chat, symbols
     }
 
+    private var sidebarRootPath: String {
+        let cwd = FileManager.default.currentDirectoryPath
+        if cwd == "/" {
+            return FileManager.default.homeDirectoryForCurrentUser.path
+        }
+        return cwd
+    }
+
     var body: some View {
         NavigationSplitView {
             VStack(spacing: 0) {
@@ -36,8 +44,10 @@ struct ContentView: View {
 
                 switch sidebarMode {
                 case .files:
-                    FileTreeView(rootPath: FileManager.default.homeDirectoryForCurrentUser.path,
-                               selectedPath: $selectedPath)
+                    FileTreeView(
+                        rootPath: sidebarRootPath,
+                        selectedPath: $selectedPath
+                    )
                 case .chat:
                     ChatView(client: client)
                 case .symbols:
