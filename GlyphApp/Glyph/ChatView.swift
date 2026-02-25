@@ -28,7 +28,6 @@ struct ChatView: View {
     @State private var isTyping = false
 
     private var canSend: Bool {
-        client.isConnected &&
         !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         !isTyping
     }
@@ -96,7 +95,7 @@ struct ChatView: View {
                             RoundedRectangle(cornerRadius: 8)
                                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                         )
-                        .disabled(!client.isConnected || isTyping)
+                        .disabled(isTyping)
 
                     Button(action: sendMessage) {
                         Image(systemName: "arrow.up.circle.fill")

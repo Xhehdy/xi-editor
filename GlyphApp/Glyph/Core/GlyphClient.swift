@@ -62,6 +62,7 @@ final class GlyphClient: ObservableObject {
         ioQueue.async { [connection] in
             connection.disconnect()
         }
+        stopManagedCoreProcess()
         isConnected = false
         coreVersion = nil
         connectionStatus = .disconnected
@@ -322,6 +323,7 @@ final class GlyphClient: ObservableObject {
         try? await runIO { [self] in
             self.connection.disconnect()
         }
+        stopManagedCoreProcess()
         coreVersion = nil
         lastError = error.localizedDescription
         connectionStatus = .error
@@ -355,9 +357,8 @@ final class GlyphClient: ObservableObject {
                 let process = Process()
                 process.executableURL = executableURL
                 process.arguments = []
-                let outputPipe = Pipe()
-                process.standardOutput = outputPipe
-                process.standardError = outputPipe
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
                 try process.run()
                 managedCoreProcess = process
             }
@@ -365,6 +366,14 @@ final class GlyphClient: ObservableObject {
         } catch {
             return false
         }
+    }
+
+    private func stopManagedCoreProcess() {
+        guard let process = managedCoreProcess else { return }
+        if process.isRunning {
+            process.terminate()
+        }
+        managedCoreProcess = nil
     }
 
     private func waitForCoreSocket(timeoutSeconds: TimeInterval) async {

@@ -137,9 +137,16 @@ struct EditorView: View {
         do {
             let (id, initialContent) = try await client.newView(path: filePath)
             viewId = id
-            text = initialContent
-            spans = []
-            cursorByteOffset = initialContent.utf8.count
+
+            if let (content, loadedSpans) = try? await client.getContent(viewId: id) {
+                text = content
+                spans = loadedSpans
+                cursorByteOffset = content.utf8.count
+            } else {
+                text = initialContent
+                spans = []
+                cursorByteOffset = initialContent.utf8.count
+            }
 
             if let path = filePath {
                 try? await client.indexFile(path: path)
