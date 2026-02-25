@@ -1,0 +1,19 @@
+[package]
+name = "glyph-patch"
+description = "Diff and patch computation for text buffers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glyph-rope = { path = "../glyph-rope", features = ["serde"] }
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+criterion = "0.5"
+rmp-serde.workspace = true
+
+[[bench]]
+name = "diff_apply"
+harness = false

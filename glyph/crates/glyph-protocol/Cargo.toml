@@ -1,0 +1,14 @@
+[package]
+name = "glyph-protocol"
+description = "IPC protocol definitions (Core <-> UI)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+glyph-events = { path = "../glyph-events" }
+glyph-patch = { path = "../glyph-patch" }
+serde.workspace = true
+serde_json.workspace = true
+rmp-serde.workspace = true  # MessagePack for high-perf serialization
+thiserror.workspace = true

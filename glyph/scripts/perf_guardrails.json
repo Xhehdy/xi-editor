@@ -1,0 +1,29 @@
+{
+  "max_regression_pct": 10.0,
+  "benchmarks": {
+    "diff_compute/line_hash_diff/64kb-ish": {
+      "mean_ns": 250000.0,
+      "p95_ns": 270000.0
+    },
+    "diff_compute/line_hash_diff/512kb-ish": {
+      "mean_ns": 2000000.0,
+      "p95_ns": 2200000.0
+    },
+    "diff_compute/line_hash_diff/1mb-ish": {
+      "mean_ns": 4000000.0,
+      "p95_ns": 4300000.0
+    },
+    "end_to_end_patch_pipeline/core_plus_ui_sim/64kb-ish": {
+      "mean_ns": 280000.0,
+      "p95_ns": 300000.0
+    },
+    "end_to_end_patch_pipeline/core_plus_ui_sim/512kb-ish": {
+      "mean_ns": 2300000.0,
+      "p95_ns": 2500000.0
+    },
+    "end_to_end_patch_pipeline/core_plus_ui_sim/1mb-ish": {
+      "mean_ns": 4500000.0,
+      "p95_ns": 4800000.0
+    }
+  }
+}

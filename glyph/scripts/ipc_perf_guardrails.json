@@ -1,0 +1,13 @@
+{
+  "max_regression_pct": 25.0,
+  "benchmarks": {
+    "apply_edit_1b": {
+      "mean_us": 40.0,
+      "p95_us": 90.0
+    },
+    "get_content_64kb": {
+      "mean_us": 220.0,
+      "p95_us": 360.0
+    }
+  }
+}

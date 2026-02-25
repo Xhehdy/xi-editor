@@ -1,0 +1,11 @@
+[package]
+name = "glyph-ce"
+version = "0.1.0"
+edition = "2021"
+description = "Comprehension Engine - Semantic understanding of codebases"
+
+[dependencies]
+glyph-syntax = { path = "../glyph-syntax" }
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+tracing = "0.1"

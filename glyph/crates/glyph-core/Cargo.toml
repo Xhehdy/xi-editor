@@ -1,0 +1,32 @@
+[package]
+name = "glyph-core"
+description = "Main Glyph IDE core process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "glyph"
+path = "src/main.rs"
+
+[dependencies]
+glyph-rope = { path = "../glyph-rope", features = ["serde"] }
+glyph-buffer = { path = "../glyph-buffer" }
+glyph-patch = { path = "../glyph-patch" }
+glyph-events = { path = "../glyph-events" }
+glyph-protocol = { path = "../glyph-protocol" }
+glyph-scheduler = { path = "../glyph-scheduler" }
+glyph-syntax = { path = "../glyph-syntax" }
+glyph-intent = { path = "../glyph-intent" }
+glyph-ce = { path = "../glyph-ce" }
+glyph-graph = { path = "../glyph-graph" }
+glyph-vectors = { path = "../glyph-vectors" }
+glyph-llm = { path = "../glyph-llm" }
+
+tokio.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+thiserror.workspace = true

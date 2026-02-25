@@ -44,6 +44,12 @@ script:
   - cargo test --all || exit
   - if [ "$TRAVIS_RUST_VERSION" = 'stable' ]; then cargo fmt --all -- --check; fi
   - if [ "$TRAVIS_RUST_VERSION" = 'stable' ]; then cargo clippy --all -- -D warnings; fi
+  - cd ../glyph
+  - RUSTFLAGS="-D warnings" cargo check --all || exit
+  - cargo test --all || exit
+  - if [ "$TRAVIS_RUST_VERSION" = 'stable' ]; then cargo fmt --all -- --check; fi
+  - if [ "$TRAVIS_RUST_VERSION" = 'stable' ]; then cargo clippy --all -- -D warnings; fi
+  - if [ "$TRAVIS_OS_NAME" = 'linux' ] && [ "$TRAVIS_RUST_VERSION" = 'stable' ]; then bash scripts/ci_perf_guard.sh; fi
 
 after_success: |
   if [[ "$TRAVIS_OS_NAME" == linux && "$TRAVIS_RUST_VERSION" == nightly ]]; then

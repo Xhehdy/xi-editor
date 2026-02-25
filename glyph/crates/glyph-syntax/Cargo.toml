@@ -1,0 +1,17 @@
+[package]
+name = "glyph-syntax"
+description = "Syntax highlighting using tree-sitter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tree-sitter = "0.24"
+tree-sitter-highlight = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-json = "0.24"
+
+serde.workspace = true
+thiserror.workspace = true
