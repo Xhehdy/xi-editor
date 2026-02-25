@@ -26,6 +26,11 @@ struct EditorView: View {
 
     let filePath: String?
 
+    private enum HistoryAction {
+        case undo
+        case redo
+    }
+
     init(client: GlyphClient, filePath: String? = nil) {
         self.client = client
         self.filePath = filePath
@@ -36,6 +41,7 @@ struct EditorView: View {
             if isLoading {
                 ProgressView("Connecting to Core...")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityIdentifier("editor.loading")
             } else if let error = errorMessage {
                 VStack(spacing: 16) {
                     Image(systemName: "exclamationmark.triangle")
@@ -48,6 +54,7 @@ struct EditorView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityIdentifier("editor.error")
             } else {
                 VStack(spacing: 0) {
                     ZStack(alignment: .topLeading) {
@@ -58,6 +65,7 @@ struct EditorView: View {
                             onSelectionChange: { cursorByteOffset = $0 }
                         )
                         .font(.system(.body, design: .monospaced))
+                        .accessibilityIdentifier("editor.text")
 
                         if let ghost = ghostText, !ghost.isEmpty {
                             Text(ghost)
@@ -69,40 +77,9 @@ struct EditorView: View {
                         }
                     }
 
-                    HStack {
-                        if let path = filePath {
-                            Text(URL(fileURLWithPath: path).lastPathComponent)
-                        } else {
-                            Text("Untitled")
-                        }
-                        if isSyncing {
-                            Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                        }
-                        if let inlineErrorMessage {
-                            Text(inlineErrorMessage)
-                                .lineLimit(1)
-                                .foregroundColor(.red)
-                        }
-                        Spacer()
-                        Text(client.connectionStatus.rawValue)
-                            .foregroundColor(client.isConnected ? .green : .orange)
-                        if let version = client.coreVersion {
-                            Text("Core v\(version)")
-                        }
-                    }
-                    .font(.caption)
-                    .padding(.horizontal)
-                    .frame(height: 24)
-                    .background(Color(NSColor.windowBackgroundColor))
-                    .overlay(
-                        Rectangle()
-                            .frame(height: 1)
-                            .foregroundColor(Color(NSColor.separatorColor)),
-                        alignment: .top
-                    )
+                    statusBar
                 }
+                .accessibilityIdentifier("editor.root")
             }
         }
         .task {
@@ -123,6 +100,20 @@ struct EditorView: View {
         errorMessage = nil
         inlineErrorMessage = nil
         ghostText = nil
+
+        if shouldUseUITestStubEditor {
+            let stub = """
+            struct Account {
+                let id: String
+                let balanceMinor: Int
+            }
+            """
+            text = stub
+            spans = []
+            cursorByteOffset = stub.utf8.count
+            isLoading = false
+            return
+        }
 
         if !client.isConnected {
             await client.connect()
@@ -219,6 +210,147 @@ struct EditorView: View {
             if let ghost = try? await client.requestCompletion(viewId: id, position: position) {
                 await MainActor.run {
                     ghostText = ghost
+                }
+            }
+        }
+    }
+
+    private var shouldUseUITestStubEditor: Bool {
+        ProcessInfo.processInfo.environment["GLYPH_UI_TEST_STUB_EDITOR"] == "1"
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 10) {
+            Text(fileDisplayName)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            if isSyncing {
+                Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            if let inlineErrorMessage {
+                Text(inlineErrorMessage)
+                    .lineLimit(1)
+                    .foregroundColor(.red)
+            }
+
+            Spacer()
+
+            Button {
+                performHistoryAction(.undo)
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.plain)
+            .disabled(!canApplyHistoryAction)
+            .help("Undo")
+            .accessibilityIdentifier("editor.undo")
+
+            Button {
+                performHistoryAction(.redo)
+            } label: {
+                Image(systemName: "arrow.uturn.forward")
+            }
+            .buttonStyle(.plain)
+            .disabled(!canApplyHistoryAction)
+            .help("Redo")
+            .accessibilityIdentifier("editor.redo")
+
+            Text("Ln \(cursorLocation.line), Col \(cursorLocation.column)")
+                .monospacedDigit()
+                .accessibilityIdentifier("editor.cursor")
+
+            Text("\(text.count) chars")
+                .monospacedDigit()
+                .foregroundColor(.secondary)
+                .accessibilityIdentifier("editor.charCount")
+
+            if !client.isConnected && !shouldUseUITestStubEditor {
+                Button("Reconnect") {
+                    Task { await connectAndLoad() }
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .accessibilityIdentifier("editor.reconnect")
+            }
+
+            Text(client.connectionStatus.rawValue)
+                .foregroundColor(client.isConnected ? .green : .orange)
+
+            if let version = client.coreVersion {
+                Text("Core v\(version)")
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal)
+        .frame(height: 26)
+        .background(Color(NSColor.windowBackgroundColor))
+        .overlay(
+            Rectangle()
+                .frame(height: 1)
+                .foregroundColor(Color(NSColor.separatorColor)),
+            alignment: .top
+        )
+    }
+
+    private var fileDisplayName: String {
+        if let path = filePath {
+            return URL(fileURLWithPath: path).lastPathComponent
+        }
+        return "Untitled"
+    }
+
+    private var canApplyHistoryAction: Bool {
+        viewId != nil && !isLoading && !isSyncing
+    }
+
+    private var cursorLocation: (line: Int, column: Int) {
+        let clampedOffset = min(max(cursorByteOffset, 0), text.utf8.count)
+        let index = stringIndex(forByteOffset: clampedOffset, in: text)
+        var line = 1
+        var column = 1
+        for character in text[..<index] {
+            if character == "\n" {
+                line += 1
+                column = 1
+            } else {
+                column += 1
+            }
+        }
+        return (line, column)
+    }
+
+    private func stringIndex(forByteOffset offset: Int, in string: String) -> String.Index {
+        let utf8View = string.utf8
+        let utf8Index = utf8View.index(utf8View.startIndex, offsetBy: offset)
+        return String.Index(utf8Index, within: string) ?? string.endIndex
+    }
+
+    private func performHistoryAction(_ action: HistoryAction) {
+        guard let id = viewId else { return }
+
+        Task {
+            do {
+                switch action {
+                case .undo:
+                    try await client.undo(viewId: id)
+                case .redo:
+                    try await client.redo(viewId: id)
+                }
+
+                let (content, loadedSpans) = try await client.getContent(viewId: id)
+                await MainActor.run {
+                    text = content
+                    spans = loadedSpans
+                    cursorByteOffset = min(cursorByteOffset, content.utf8.count)
+                    inlineErrorMessage = nil
+                }
+            } catch {
+                await MainActor.run {
+                    inlineErrorMessage = error.localizedDescription
                 }
             }
         }

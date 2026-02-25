@@ -13,26 +13,52 @@ struct FileTreeView: View {
     @Binding var selectedPath: String?
     @State private var expandedPaths: Set<String> = []
     @State private var showHiddenFiles = false
+    @State private var filterText = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(URL(fileURLWithPath: rootPath).lastPathComponent)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                Spacer()
-                Button {
-                    showHiddenFiles.toggle()
-                } label: {
-                    Image(systemName: showHiddenFiles ? "eye.slash" : "eye")
+            VStack(spacing: 8) {
+                HStack {
+                    Text(URL(fileURLWithPath: rootPath).lastPathComponent)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    Button {
+                        showHiddenFiles.toggle()
+                    } label: {
+                        Image(systemName: showHiddenFiles ? "eye.slash" : "eye")
+                    }
+                    .buttonStyle(.plain)
+                    .help(showHiddenFiles ? "Hide hidden files" : "Show hidden files")
                 }
-                .buttonStyle(.plain)
-                .help(showHiddenFiles ? "Hide hidden files" : "Show hidden files")
+
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    TextField("Filter files", text: $filterText)
+                        .textFieldStyle(.plain)
+                        .accessibilityIdentifier("files.filter")
+                    if !filterText.isEmpty {
+                        Button {
+                            filterText = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.vertical, 2)
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(Color(NSColor.controlBackgroundColor))
+            .overlay(
+                Rectangle()
+                    .frame(height: 1)
+                    .foregroundColor(Color(NSColor.separatorColor)),
+                alignment: .bottom
+            )
 
             List {
                 FileNodeView(
@@ -40,12 +66,15 @@ struct FileTreeView: View {
                     isRoot: true,
                     selectedPath: $selectedPath,
                     expandedPaths: $expandedPaths,
-                    showHiddenFiles: showHiddenFiles
+                    showHiddenFiles: showHiddenFiles,
+                    filterText: filterText
                 )
                 .id("root-\(showHiddenFiles)")
             }
             .listStyle(.sidebar)
+            .accessibilityIdentifier("files.list")
         }
+        .accessibilityIdentifier("files.root")
     }
 }
 
@@ -55,6 +84,7 @@ struct FileNodeView: View {
     @Binding var selectedPath: String?
     @Binding var expandedPaths: Set<String>
     let showHiddenFiles: Bool
+    let filterText: String
 
     @State private var children: [String]?
 
@@ -67,13 +97,14 @@ struct FileNodeView: View {
             // Don't show root itself, just children (or show root as header?)
             // Usually we show the folder name if it's a project
             if let children = children {
-                ForEach(children, id: \.self) { childPath in
+                ForEach(filteredChildren(from: children), id: \.self) { childPath in
                     FileNodeView(
                         path: childPath,
                         isRoot: false,
                         selectedPath: $selectedPath,
                         expandedPaths: $expandedPaths,
-                        showHiddenFiles: showHiddenFiles
+                        showHiddenFiles: showHiddenFiles,
+                        filterText: filterText
                     )
                 }
             } else {
@@ -93,16 +124,17 @@ struct FileNodeView: View {
                     }
 
                     Label {
-                        Text(URL(fileURLWithPath: path).lastPathComponent)
+                        Text(fileName)
                             .foregroundColor(selectedPath == path ? .accentColor : .primary)
                     } icon: {
                         Image(systemName: iconName)
-                            .foregroundColor(isDirectory ? .blue : .secondary)
+                            .foregroundColor(isDirectory ? .accentColor : .secondary)
                     }
-                    .font(.callout) // Consistent sizing
+                    .font(.callout)
 
                     Spacer()
                 }
+                .padding(.horizontal, 6)
                 .padding(.vertical, 4)
                 .contentShape(Rectangle())
                 .onTapGesture {
@@ -114,13 +146,14 @@ struct FileNodeView: View {
                 }
 
                 if isExpanded, let children = children {
-                    ForEach(children, id: \.self) { childPath in
+                    ForEach(filteredChildren(from: children), id: \.self) { childPath in
                         FileNodeView(
                             path: childPath,
                             isRoot: false,
                             selectedPath: $selectedPath,
                             expandedPaths: $expandedPaths,
-                            showHiddenFiles: showHiddenFiles
+                            showHiddenFiles: showHiddenFiles,
+                            filterText: filterText
                         )
                             .padding(.leading, 16)
                     }
@@ -138,6 +171,28 @@ struct FileNodeView: View {
         var isDir: ObjCBool = false
         FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
         return isDir.boolValue
+    }
+
+    private var fileName: String {
+        URL(fileURLWithPath: path).lastPathComponent
+    }
+
+    private var normalizedFilterText: String {
+        filterText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func filteredChildren(from paths: [String]) -> [String] {
+        guard !normalizedFilterText.isEmpty else {
+            return paths
+        }
+
+        return paths.filter { childPath in
+            if dirCheck(childPath) {
+                return true
+            }
+            let fileName = URL(fileURLWithPath: childPath).lastPathComponent
+            return fileName.localizedCaseInsensitiveContains(normalizedFilterText)
+        }
     }
 
     private var iconName: String {

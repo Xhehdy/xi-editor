@@ -34,14 +34,30 @@ enum UiToCore: Codable {
     case chat(message: String, contextFiles: [String])
     case requestCompletion(viewId: UInt64, position: Int)
     case indexFile(path: String)
+    case queueIndexFile(path: String)
+    case flushIndexQueue
+    case getIndexQueueStats
     case querySymbols(path: String)
     case searchSymbols(query: String)
+    case queryGraphFile(path: String)
+    case searchGraph(
+        query: String,
+        limit: Int?,
+        offset: Int?,
+        kindFilter: String?,
+        fileFilter: String?
+    )
+    case queryGraphContext(query: String, contextFiles: [String]?, limit: Int?)
 
     private enum CodingKeys: String, CodingKey {
         case Hello, NewView, CloseView, Input, ApplyEdit, GetContent, Chat, RequestCompletion
-        case IndexFile, QuerySymbols, SearchSymbols
+        case IndexFile, QueueIndexFile, FlushIndexQueue, GetIndexQueueStats
+        case QuerySymbols, SearchSymbols, QueryGraphFile, SearchGraph, QueryGraphContext
         case client_version, capabilities, path, view_id, event, message
-        case context_files, position, query
+        case context_files, position, query, limit, offset, kind_filter, file_filter
+        case queued_count, debounce_ms, cancelled, stats
+        case queued, in_progress, completed, failed, retried, dropped
+        case max_pending, max_retries, last_error
         case start, deleted_len, inserted_text, base_revision
     }
 
@@ -83,12 +99,34 @@ enum UiToCore: Codable {
         case .indexFile(let path):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexFile)
             try nested.encode(path, forKey: .path)
+        case .queueIndexFile(let path):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueueIndexFile)
+            try nested.encode(path, forKey: .path)
+        case .flushIndexQueue:
+            try container.encodeNil(forKey: .FlushIndexQueue)
+        case .getIndexQueueStats:
+            try container.encodeNil(forKey: .GetIndexQueueStats)
         case .querySymbols(let path):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QuerySymbols)
             try nested.encode(path, forKey: .path)
         case .searchSymbols(let query):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .SearchSymbols)
             try nested.encode(query, forKey: .query)
+        case .queryGraphFile(let path):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueryGraphFile)
+            try nested.encode(path, forKey: .path)
+        case .searchGraph(let query, let limit, let offset, let kindFilter, let fileFilter):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .SearchGraph)
+            try nested.encode(query, forKey: .query)
+            try nested.encodeIfPresent(limit, forKey: .limit)
+            try nested.encodeIfPresent(offset, forKey: .offset)
+            try nested.encodeIfPresent(kindFilter, forKey: .kind_filter)
+            try nested.encodeIfPresent(fileFilter, forKey: .file_filter)
+        case .queryGraphContext(let query, let contextFiles, let limit):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueryGraphContext)
+            try nested.encode(query, forKey: .query)
+            try nested.encodeIfPresent(contextFiles, forKey: .context_files)
+            try nested.encodeIfPresent(limit, forKey: .limit)
         }
     }
 
@@ -135,12 +173,40 @@ enum UiToCore: Codable {
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexFile) {
             let path = try nested.decode(String.self, forKey: .path)
             self = .indexFile(path: path)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueueIndexFile) {
+            let path = try nested.decode(String.self, forKey: .path)
+            self = .queueIndexFile(path: path)
+        } else if container.contains(.FlushIndexQueue) {
+            self = .flushIndexQueue
+        } else if container.contains(.GetIndexQueueStats) {
+            self = .getIndexQueueStats
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QuerySymbols) {
             let path = try nested.decode(String.self, forKey: .path)
             self = .querySymbols(path: path)
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .SearchSymbols) {
             let query = try nested.decode(String.self, forKey: .query)
             self = .searchSymbols(query: query)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueryGraphFile) {
+            let path = try nested.decode(String.self, forKey: .path)
+            self = .queryGraphFile(path: path)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .SearchGraph) {
+            let query = try nested.decode(String.self, forKey: .query)
+            let limit = try nested.decodeIfPresent(Int.self, forKey: .limit)
+            let offset = try nested.decodeIfPresent(Int.self, forKey: .offset)
+            let kindFilter = try nested.decodeIfPresent(String.self, forKey: .kind_filter)
+            let fileFilter = try nested.decodeIfPresent(String.self, forKey: .file_filter)
+            self = .searchGraph(
+                query: query,
+                limit: limit,
+                offset: offset,
+                kindFilter: kindFilter,
+                fileFilter: fileFilter
+            )
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .QueryGraphContext) {
+            let query = try nested.decode(String.self, forKey: .query)
+            let contextFiles = try nested.decodeIfPresent([String].self, forKey: .context_files)
+            let limit = try nested.decodeIfPresent(Int.self, forKey: .limit)
+            self = .queryGraphContext(query: query, contextFiles: contextFiles, limit: limit)
         } else {
             throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Unknown message type"))
         }
@@ -255,6 +321,59 @@ struct SymbolInfo: Codable, Sendable, Identifiable {
     var id: String { "\(file):\(line):\(name)" }
 }
 
+struct GraphNodeInfo: Codable, Sendable, Identifiable, Equatable {
+    let id: Int64
+    let kind: String
+    let name: String
+    let file: String?
+}
+
+struct GraphEdgeInfo: Codable, Sendable, Equatable {
+    let fromId: Int64
+    let toId: Int64
+    let kind: String
+
+    enum CodingKeys: String, CodingKey {
+        case fromId = "from_id"
+        case toId = "to_id"
+        case kind
+    }
+}
+
+struct GraphContextItem: Codable, Sendable, Equatable {
+    let node: GraphNodeInfo
+    let score: Double
+    let incoming: Int
+    let outgoing: Int
+    let reasons: [String]
+}
+
+struct IndexQueueStatsInfo: Codable, Sendable, Equatable {
+    let queued: Int
+    let inProgress: Int
+    let completed: UInt64
+    let failed: UInt64
+    let retried: UInt64
+    let dropped: UInt64
+    let maxPending: Int
+    let debounceMs: UInt64
+    let maxRetries: UInt8
+    let lastError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case queued
+        case inProgress = "in_progress"
+        case completed
+        case failed
+        case retried
+        case dropped
+        case maxPending = "max_pending"
+        case debounceMs = "debounce_ms"
+        case maxRetries = "max_retries"
+        case lastError = "last_error"
+    }
+}
+
 enum CoreErrorCode: String, Codable, Sendable {
     case unknown = "UNKNOWN"
     case invalidRequest = "INVALID_REQUEST"
@@ -269,6 +388,8 @@ enum CoreErrorCode: String, Codable, Sendable {
     case llmFailure = "LLM_FAILURE"
     case completionTimeout = "COMPLETION_TIMEOUT"
     case indexingFailed = "INDEXING_FAILED"
+    case indexQueueFull = "INDEX_QUEUE_FULL"
+    case graphQueryFailed = "GRAPH_QUERY_FAILED"
 
     init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
@@ -291,15 +412,23 @@ enum CoreToUi: Codable, Sendable {
     case chatToken(token: String, done: Bool)
     case ghostText(viewId: UInt64, text: String)
     case fileIndexed(path: String, symbolCount: Int)
+    case indexQueued(path: String, queuedCount: Int, debounceMs: UInt64)
+    case indexQueueFlushed(cancelled: Int)
+    case indexQueueStats(stats: IndexQueueStatsInfo)
     case symbols(symbols: [SymbolInfo])
+    case graphData(nodes: [GraphNodeInfo], edges: [GraphEdgeInfo])
+    case graphContext(summary: String, items: [GraphContextItem])
     case event(CoreEvent)
     case error(message: String, code: CoreErrorCode, retryable: Bool, shouldResync: Bool)
 
     private enum CodingKeys: String, CodingKey {
         case Welcome, ViewCreated, ApplyPatch, ApplyHighlights, SetContent, ChatToken, GhostText
-        case FileIndexed, Symbols, Event, Error
+        case FileIndexed, IndexQueued, IndexQueueFlushed, IndexQueueStats
+        case Symbols, GraphData, GraphContext, Event, Error
         case core_version, view_id, content, patch, spans, token, done, text, message, symbols
         case path, symbol_count, revision
+        case queued_count, debounce_ms, cancelled, stats
+        case nodes, edges, summary, items
         case code, retryable, should_resync
     }
 
@@ -341,9 +470,28 @@ enum CoreToUi: Codable, Sendable {
             let path = try nested.decode(String.self, forKey: .path)
             let symbolCount = try nested.decode(Int.self, forKey: .symbol_count)
             self = .fileIndexed(path: path, symbolCount: symbolCount)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueued) {
+            let path = try nested.decode(String.self, forKey: .path)
+            let queuedCount = try nested.decode(Int.self, forKey: .queued_count)
+            let debounceMs = try nested.decode(UInt64.self, forKey: .debounce_ms)
+            self = .indexQueued(path: path, queuedCount: queuedCount, debounceMs: debounceMs)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueueFlushed) {
+            let cancelled = try nested.decode(Int.self, forKey: .cancelled)
+            self = .indexQueueFlushed(cancelled: cancelled)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueueStats) {
+            let stats = try nested.decode(IndexQueueStatsInfo.self, forKey: .stats)
+            self = .indexQueueStats(stats: stats)
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Symbols) {
             let symbols = try nested.decode([SymbolInfo].self, forKey: .symbols)
             self = .symbols(symbols: symbols)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GraphData) {
+            let nodes = try nested.decode([GraphNodeInfo].self, forKey: .nodes)
+            let edges = try nested.decode([GraphEdgeInfo].self, forKey: .edges)
+            self = .graphData(nodes: nodes, edges: edges)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GraphContext) {
+            let summary = try nested.decode(String.self, forKey: .summary)
+            let items = try nested.decode([GraphContextItem].self, forKey: .items)
+            self = .graphContext(summary: summary, items: items)
         } else if container.contains(.Event) {
             let event = try container.decode(CoreEvent.self, forKey: .Event)
             self = .event(event)
@@ -401,9 +549,28 @@ enum CoreToUi: Codable, Sendable {
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .FileIndexed)
             try nested.encode(path, forKey: .path)
             try nested.encode(symbolCount, forKey: .symbol_count)
+        case .indexQueued(let path, let queuedCount, let debounceMs):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueued)
+            try nested.encode(path, forKey: .path)
+            try nested.encode(queuedCount, forKey: .queued_count)
+            try nested.encode(debounceMs, forKey: .debounce_ms)
+        case .indexQueueFlushed(let cancelled):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueueFlushed)
+            try nested.encode(cancelled, forKey: .cancelled)
+        case .indexQueueStats(let stats):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .IndexQueueStats)
+            try nested.encode(stats, forKey: .stats)
         case .symbols(let symbols):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Symbols)
             try nested.encode(symbols, forKey: .symbols)
+        case .graphData(let nodes, let edges):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GraphData)
+            try nested.encode(nodes, forKey: .nodes)
+            try nested.encode(edges, forKey: .edges)
+        case .graphContext(let summary, let items):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GraphContext)
+            try nested.encode(summary, forKey: .summary)
+            try nested.encode(items, forKey: .items)
         case .event(let event):
             try container.encode(event, forKey: .Event)
         case .error(let message, let code, let retryable, let shouldResync):

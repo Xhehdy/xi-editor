@@ -13,7 +13,8 @@ struct GlyphApp: App {
         WindowGroup {
             ContentView()
         }
-        .windowStyle(.automatic)
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("New Window") {

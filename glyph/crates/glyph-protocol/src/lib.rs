@@ -62,10 +62,38 @@ pub enum UiToCore {
     RequestCompletion { view_id: ViewId, position: usize },
     /// Index a file for comprehension
     IndexFile { path: String },
+    /// Queue a file for debounced background indexing
+    QueueIndexFile { path: String },
+    /// Flush/cancel queued indexing work
+    FlushIndexQueue,
+    /// Read indexing queue metrics
+    GetIndexQueueStats,
     /// Query symbols in file
     QuerySymbols { path: String },
     /// Search symbols by name
     SearchSymbols { query: String },
+    /// Query graph nodes/edges for a specific file
+    QueryGraphFile { path: String },
+    /// Search graph nodes by name with optional pagination and filters
+    SearchGraph {
+        query: String,
+        #[serde(default)]
+        limit: Option<usize>,
+        #[serde(default)]
+        offset: Option<usize>,
+        #[serde(default)]
+        kind_filter: Option<String>,
+        #[serde(default)]
+        file_filter: Option<String>,
+    },
+    /// Build ranked graph context for chat/intent/wiki consumption
+    QueryGraphContext {
+        query: String,
+        #[serde(default)]
+        context_files: Option<Vec<String>>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
 }
 
 /// A highlighted region in the text
@@ -94,6 +122,8 @@ pub enum ErrorCode {
     LlmFailure,
     CompletionTimeout,
     IndexingFailed,
+    IndexQueueFull,
+    GraphQueryFailed,
 }
 
 /// Messages sent from Core to UI
@@ -131,8 +161,28 @@ pub enum CoreToUi {
     GhostText { view_id: ViewId, text: String },
     /// File indexed successfully
     FileIndexed { path: String, symbol_count: usize },
+    /// File accepted into debounced index queue
+    IndexQueued {
+        path: String,
+        queued_count: usize,
+        debounce_ms: u64,
+    },
+    /// Index queue flushed
+    IndexQueueFlushed { cancelled: usize },
+    /// Index queue metrics
+    IndexQueueStats { stats: IndexQueueStatsInfo },
     /// Symbol query results
     Symbols { symbols: Vec<SymbolInfo> },
+    /// Graph query results
+    GraphData {
+        nodes: Vec<GraphNodeInfo>,
+        edges: Vec<GraphEdgeInfo>,
+    },
+    /// Ranked graph context payload
+    GraphContext {
+        summary: String,
+        items: Vec<GraphContextItem>,
+    },
     /// Core event notification
     Event(CoreEvent),
     /// Error response
@@ -155,6 +205,48 @@ pub struct SymbolInfo {
     pub file: String,
     pub line: usize,
     pub signature: Option<String>,
+}
+
+/// Graph node information for UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNodeInfo {
+    pub id: i64,
+    pub kind: String,
+    pub name: String,
+    pub file: Option<String>,
+}
+
+/// Graph edge information for UI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdgeInfo {
+    pub from_id: i64,
+    pub to_id: i64,
+    pub kind: String,
+}
+
+/// Ranked graph context item.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphContextItem {
+    pub node: GraphNodeInfo,
+    pub score: f64,
+    pub incoming: usize,
+    pub outgoing: usize,
+    pub reasons: Vec<String>,
+}
+
+/// Background index queue metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexQueueStatsInfo {
+    pub queued: usize,
+    pub in_progress: usize,
+    pub completed: u64,
+    pub failed: u64,
+    pub retried: u64,
+    pub dropped: u64,
+    pub max_pending: usize,
+    pub debounce_ms: u64,
+    pub max_retries: u8,
+    pub last_error: Option<String>,
 }
 
 /// Serializes a message to MessagePack bytes.
@@ -318,6 +410,229 @@ mod tests {
                 retryable: false,
                 should_resync: false,
             } if message == "legacy error"
+        ));
+    }
+
+    #[test]
+    fn test_roundtrip_graph_messages() {
+        let file_query = UiToCore::QueryGraphFile {
+            path: "src/lib.rs".to_string(),
+        };
+        let file_query_msgpack = serialize(&file_query).unwrap();
+        let file_query_decoded: UiToCore = deserialize(&file_query_msgpack).unwrap();
+        assert!(matches!(
+            file_query_decoded,
+            UiToCore::QueryGraphFile { path } if path == "src/lib.rs"
+        ));
+        let file_query_json = serialize_json(&file_query).unwrap();
+        let file_query_json_decoded: UiToCore = deserialize_json(&file_query_json).unwrap();
+        assert!(matches!(
+            file_query_json_decoded,
+            UiToCore::QueryGraphFile { path } if path == "src/lib.rs"
+        ));
+
+        let search_query = UiToCore::SearchGraph {
+            query: "handler".to_string(),
+            limit: Some(25),
+            offset: Some(5),
+            kind_filter: Some("function".to_string()),
+            file_filter: Some("src/lib.rs".to_string()),
+        };
+
+        let search_query_msgpack = serialize(&search_query).unwrap();
+        let search_query_decoded: UiToCore = deserialize(&search_query_msgpack).unwrap();
+        assert!(matches!(
+            search_query_decoded,
+            UiToCore::SearchGraph {
+                query,
+                limit: Some(25),
+                offset: Some(5),
+                kind_filter: Some(kind_filter),
+                file_filter: Some(file_filter),
+            } if query == "handler"
+                && kind_filter == "function"
+                && file_filter == "src/lib.rs"
+        ));
+        let search_query_json = serialize_json(&search_query).unwrap();
+        let search_query_json_decoded: UiToCore = deserialize_json(&search_query_json).unwrap();
+        assert!(matches!(
+            search_query_json_decoded,
+            UiToCore::SearchGraph {
+                query,
+                limit: Some(25),
+                offset: Some(5),
+                kind_filter: Some(kind_filter),
+                file_filter: Some(file_filter),
+            } if query == "handler"
+                && kind_filter == "function"
+                && file_filter == "src/lib.rs"
+        ));
+
+        let legacy_search_json = br#"{"SearchGraph":{"query":"handler","limit":25}}"#;
+        let legacy_search_decoded: UiToCore = deserialize_json(legacy_search_json).unwrap();
+        assert!(matches!(
+            legacy_search_decoded,
+            UiToCore::SearchGraph {
+                query,
+                limit: Some(25),
+                offset: None,
+                kind_filter: None,
+                file_filter: None,
+            } if query == "handler"
+        ));
+
+        let context_query = UiToCore::QueryGraphContext {
+            query: "refactor handler".to_string(),
+            context_files: Some(vec!["src/lib.rs".to_string(), "src/router.rs".to_string()]),
+            limit: Some(8),
+        };
+        let context_query_json = serialize_json(&context_query).unwrap();
+        let context_query_json_decoded: UiToCore = deserialize_json(&context_query_json).unwrap();
+        assert!(matches!(
+            context_query_json_decoded,
+            UiToCore::QueryGraphContext {
+                query,
+                context_files: Some(files),
+                limit: Some(8),
+            } if query == "refactor handler"
+                && files.len() == 2
+                && files[0] == "src/lib.rs"
+                && files[1] == "src/router.rs"
+        ));
+
+        let legacy_context_query_json = br#"{"QueryGraphContext":{"query":"refactor handler"}}"#;
+        let legacy_context_query_decoded: UiToCore =
+            deserialize_json(legacy_context_query_json).unwrap();
+        assert!(matches!(
+            legacy_context_query_decoded,
+            UiToCore::QueryGraphContext {
+                query,
+                context_files: None,
+                limit: None,
+            } if query == "refactor handler"
+        ));
+
+        let response = CoreToUi::GraphData {
+            nodes: vec![GraphNodeInfo {
+                id: 1,
+                kind: "function".to_string(),
+                name: "apply_edit".to_string(),
+                file: Some("src/lib.rs".to_string()),
+            }],
+            edges: vec![GraphEdgeInfo {
+                from_id: 1,
+                to_id: 2,
+                kind: "calls".to_string(),
+            }],
+        };
+
+        let msgpack_bytes = serialize(&response).unwrap();
+        let msgpack_decoded: CoreToUi = deserialize(&msgpack_bytes).unwrap();
+        assert!(matches!(
+            msgpack_decoded,
+            CoreToUi::GraphData { nodes, edges }
+                if nodes.len() == 1
+                    && nodes[0].name == "apply_edit"
+                    && edges.len() == 1
+                    && edges[0].kind == "calls"
+        ));
+
+        let json_bytes = serialize_json(&response).unwrap();
+        let json_decoded: CoreToUi = deserialize_json(&json_bytes).unwrap();
+        assert!(matches!(
+            json_decoded,
+            CoreToUi::GraphData { nodes, edges }
+                if nodes.len() == 1
+                    && nodes[0].name == "apply_edit"
+                    && edges.len() == 1
+                    && edges[0].kind == "calls"
+        ));
+
+        let context_response = CoreToUi::GraphContext {
+            summary: "ranked graph context".to_string(),
+            items: vec![GraphContextItem {
+                node: GraphNodeInfo {
+                    id: 10,
+                    kind: "function".to_string(),
+                    name: "handler".to_string(),
+                    file: Some("src/lib.rs".to_string()),
+                },
+                score: 12.5,
+                incoming: 3,
+                outgoing: 5,
+                reasons: vec!["name_match".to_string(), "file_scope".to_string()],
+            }],
+        };
+        let context_response_msgpack = serialize(&context_response).unwrap();
+        let context_response_decoded: CoreToUi = deserialize(&context_response_msgpack).unwrap();
+        assert!(matches!(
+            context_response_decoded,
+            CoreToUi::GraphContext { summary, items }
+                if summary == "ranked graph context"
+                    && items.len() == 1
+                    && items[0].node.name == "handler"
+                    && (items[0].score - 12.5).abs() < f64::EPSILON
+                    && items[0].incoming == 3
+                    && items[0].outgoing == 5
+                    && items[0].reasons.len() == 2
+        ));
+
+        let context_response_json = serialize_json(&context_response).unwrap();
+        let context_response_json_decoded: CoreToUi =
+            deserialize_json(&context_response_json).unwrap();
+        assert!(matches!(
+            context_response_json_decoded,
+            CoreToUi::GraphContext { summary, items }
+                if summary == "ranked graph context"
+                    && items.len() == 1
+                    && items[0].node.name == "handler"
+                    && (items[0].score - 12.5).abs() < f64::EPSILON
+                    && items[0].incoming == 3
+                    && items[0].outgoing == 5
+                    && items[0].reasons.len() == 2
+        ));
+    }
+
+    #[test]
+    fn test_roundtrip_index_queue_messages() {
+        let queued = UiToCore::QueueIndexFile {
+            path: "src/lib.rs".to_string(),
+        };
+        let queued_msgpack = serialize(&queued).unwrap();
+        let queued_decoded: UiToCore = deserialize(&queued_msgpack).unwrap();
+        assert!(matches!(
+            queued_decoded,
+            UiToCore::QueueIndexFile { path } if path == "src/lib.rs"
+        ));
+
+        let stats_req = UiToCore::GetIndexQueueStats;
+        let stats_req_json = serialize_json(&stats_req).unwrap();
+        let stats_req_decoded: UiToCore = deserialize_json(&stats_req_json).unwrap();
+        assert!(matches!(stats_req_decoded, UiToCore::GetIndexQueueStats));
+
+        let stats_response = CoreToUi::IndexQueueStats {
+            stats: IndexQueueStatsInfo {
+                queued: 2,
+                in_progress: 1,
+                completed: 10,
+                failed: 1,
+                retried: 3,
+                dropped: 0,
+                max_pending: 256,
+                debounce_ms: 250,
+                max_retries: 2,
+                last_error: Some("transient failure".to_string()),
+            },
+        };
+        let stats_response_json = serialize_json(&stats_response).unwrap();
+        let stats_response_decoded: CoreToUi = deserialize_json(&stats_response_json).unwrap();
+        assert!(matches!(
+            stats_response_decoded,
+            CoreToUi::IndexQueueStats { stats }
+                if stats.queued == 2
+                    && stats.in_progress == 1
+                    && stats.debounce_ms == 250
+                    && stats.last_error.as_deref() == Some("transient failure")
         ));
     }
 }

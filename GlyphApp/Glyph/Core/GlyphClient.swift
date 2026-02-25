@@ -8,6 +8,16 @@
 import Foundation
 import Combine
 
+struct ChatGraphContextSnapshot: Sendable, Equatable {
+    let summary: String
+    let items: [GraphContextItem]
+}
+
+struct ChatResponsePayload: Sendable, Equatable {
+    let text: String
+    let graphContext: ChatGraphContextSnapshot?
+}
+
 /// Observable client for Glyph Core communication.
 @MainActor
 final class GlyphClient: ObservableObject {
@@ -22,6 +32,7 @@ final class GlyphClient: ObservableObject {
     @Published private(set) var coreVersion: String?
     @Published private(set) var lastError: String?
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
+    @Published private(set) var lastGraphContext: ChatGraphContextSnapshot?
 
     enum ConnectionStatus: String {
         case disconnected = "Disconnected"
@@ -143,11 +154,48 @@ final class GlyphClient: ObservableObject {
 
     /// Sends a chat message
     func chat(_ message: String, contextFiles: [String] = []) async throws -> String {
+        let response = try await chatWithContext(message, contextFiles: contextFiles)
+        return response.text
+    }
+
+    /// Sends a chat message and fetches ranked CKG context first.
+    func chatWithContext(
+        _ message: String,
+        contextFiles: [String] = [],
+        graphContextLimit: Int? = 12
+    ) async throws -> ChatResponsePayload {
+        let graphContext = try? await queryGraphContext(
+            query: message,
+            contextFiles: contextFiles,
+            limit: graphContextLimit
+        )
         let response = try await send(.chat(message: message, contextFiles: contextFiles))
         guard case .chatToken(let token, _) = response else {
             throw errorFrom(response: response)
         }
-        return token
+        return ChatResponsePayload(text: token, graphContext: graphContext)
+    }
+
+    /// Query ranked graph context directly.
+    func queryGraphContext(
+        query: String,
+        contextFiles: [String] = [],
+        limit: Int? = nil
+    ) async throws -> ChatGraphContextSnapshot {
+        let scopedFiles: [String]? = contextFiles.isEmpty ? nil : contextFiles
+        let response = try await send(
+            .queryGraphContext(query: query, contextFiles: scopedFiles, limit: limit)
+        )
+        guard case .graphContext(let summary, let items) = response else {
+            throw errorFrom(response: response)
+        }
+        let snapshot = ChatGraphContextSnapshot(summary: summary, items: items)
+        lastGraphContext = snapshot
+        return snapshot
+    }
+
+    func clearGraphContext() {
+        lastGraphContext = nil
     }
 
     /// Request inline completion
