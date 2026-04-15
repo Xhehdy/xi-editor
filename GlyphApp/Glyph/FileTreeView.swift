@@ -17,7 +17,7 @@ struct FileTreeView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 8) {
+            VStack(spacing: GlyphUI.Space.s8) {
                 HStack {
                     Text(URL(fileURLWithPath: rootPath).lastPathComponent)
                         .font(.caption)
@@ -33,7 +33,7 @@ struct FileTreeView: View {
                     .help(showHiddenFiles ? "Hide hidden files" : "Show hidden files")
                 }
 
-                HStack(spacing: 6) {
+                HStack(spacing: GlyphUI.Space.s6) {
                     Image(systemName: "magnifyingglass")
                         .foregroundColor(.secondary)
                     TextField("Filter files", text: $filterText)
@@ -49,10 +49,10 @@ struct FileTreeView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.vertical, 2)
+                .padding(.vertical, GlyphUI.Space.s4)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, GlyphUI.Space.s10)
+            .padding(.vertical, GlyphUI.Space.s6)
             .overlay(
                 Rectangle()
                     .frame(height: 1)
@@ -134,8 +134,8 @@ struct FileNodeView: View {
 
                     Spacer()
                 }
-                .padding(.horizontal, 6)
-                .padding(.vertical, 4)
+                .padding(.horizontal, GlyphUI.Space.s6)
+                .padding(.vertical, GlyphUI.Space.s4)
                 .contentShape(Rectangle())
                 .onTapGesture {
                     if isDirectory {
@@ -155,7 +155,7 @@ struct FileNodeView: View {
                             showHiddenFiles: showHiddenFiles,
                             filterText: filterText
                         )
-                            .padding(.leading, 16)
+                            .padding(.leading, GlyphUI.Space.s16)
                     }
                 }
             }

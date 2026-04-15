@@ -41,14 +41,14 @@ struct SymbolBrowserView: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(10)
+            .padding(GlyphUI.Space.s10)
             .background(Color(NSColor.controlBackgroundColor))
             .onChange(of: searchText) { _, _ in
                 scheduleSearch(immediate: false)
             }
 
             if isSearching {
-                VStack(spacing: 10) {
+                VStack(spacing: GlyphUI.Space.s10) {
                     ProgressView()
                     Text("Searching symbols...")
                         .font(.caption)
@@ -56,7 +56,7 @@ struct SymbolBrowserView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let errorMessage {
-                VStack(spacing: 10) {
+                VStack(spacing: GlyphUI.Space.s10) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(.orange)
                     Text(errorMessage)
@@ -64,10 +64,10 @@ struct SymbolBrowserView: View {
                         .multilineTextAlignment(.center)
                         .foregroundColor(.secondary)
                 }
-                .padding(16)
+                .padding(GlyphUI.Space.s16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if symbols.isEmpty {
-                VStack(spacing: 8) {
+                VStack(spacing: GlyphUI.Space.s8) {
                     Image(systemName: "magnifyingglass.circle")
                         .font(.system(size: 28))
                         .foregroundColor(.secondary)
@@ -108,7 +108,7 @@ struct SymbolBrowserView: View {
                                 .lineLimit(1)
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(.vertical, GlyphUI.Space.s4)
                 }
                 .accessibilityIdentifier("symbols.list")
             }

@@ -50,8 +50,8 @@ struct ChatView: View {
                         .accessibilityIdentifier("chat.header")
                     Text(client.connectionStatus.rawValue)
                         .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 2)
+                        .padding(.horizontal, GlyphUI.Space.s8)
+                        .padding(.vertical, GlyphUI.Space.s4)
                         .background(client.isConnected ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
                         .clipShape(Capsule())
                     Spacer()
@@ -70,7 +70,7 @@ struct ChatView: View {
                             .scaleEffect(0.5)
                     }
                 }
-                .padding()
+                .padding(GlyphUI.Space.s12)
                 .background(Color(NSColor.controlBackgroundColor))
                 .accessibilityIdentifier("chat.toolbar")
             }
@@ -80,31 +80,31 @@ struct ChatView: View {
                     .font(.caption)
                     .foregroundColor(.red)
                     .lineLimit(2)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, GlyphUI.Space.s12)
+                    .padding(.bottom, GlyphUI.Space.s6)
             }
             if let context = client.lastGraphContext {
                 Text("CKG: \(context.items.count) items, \(context.summary)")
                     .font(.caption2)
                     .foregroundColor(.secondary)
                     .lineLimit(2)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, GlyphUI.Space.s12)
+                    .padding(.bottom, GlyphUI.Space.s6)
             }
 
             ScrollViewReader { proxy in
                 ScrollView {
                     if messages.isEmpty {
                         emptyState
-                            .padding(20)
+                            .padding(GlyphUI.Space.s20)
                     } else {
-                        LazyVStack(alignment: .leading, spacing: 12) {
+                        LazyVStack(alignment: .leading, spacing: GlyphUI.Space.s12) {
                             ForEach(messages) { msg in
                                 ChatBubble(message: msg)
                                     .id(msg.id)
                             }
                         }
-                        .padding()
+                        .padding(GlyphUI.Space.s12)
                     }
                 }
                 .onChange(of: messages.count) { _, _ in
@@ -116,24 +116,24 @@ struct ChatView: View {
                 }
             }
 
-            VStack(spacing: 8) {
-                HStack(alignment: .bottom, spacing: 8) {
+            VStack(spacing: GlyphUI.Space.s8) {
+                HStack(alignment: .bottom, spacing: GlyphUI.Space.s8) {
                     ZStack(alignment: .topLeading) {
                         if inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                             Text("Ask about this project, architecture, or a file...")
                                 .foregroundColor(.secondary)
-                                .padding(.top, 12)
-                                .padding(.leading, 9)
+                                .padding(.top, GlyphUI.Space.s12)
+                                .padding(.leading, GlyphUI.Space.s10)
                         }
                         TextEditor(text: $inputText)
                             .font(.body)
                             .frame(minHeight: 40, maxHeight: 110)
                             .fixedSize(horizontal: false, vertical: true)
-                            .padding(4)
+                            .padding(GlyphUI.Space.s4)
                             .background(Color(NSColor.textBackgroundColor))
-                            .cornerRadius(8)
+                            .cornerRadius(GlyphUI.Space.s8)
                             .overlay(
-                                RoundedRectangle(cornerRadius: 8)
+                                RoundedRectangle(cornerRadius: GlyphUI.Space.s8)
                                     .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
                             )
                             .disabled(isTyping)
@@ -151,7 +151,7 @@ struct ChatView: View {
                     .help("Send (Command + Return)")
                 }
             }
-            .padding()
+            .padding(GlyphUI.Space.s12)
             .background(Color(NSColor.controlBackgroundColor))
         }
         .task {
@@ -168,7 +168,7 @@ struct ChatView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: GlyphUI.Space.s8) {
             Label("No messages yet", systemImage: "bubble.left.and.bubble.right")
                 .font(.headline)
             Text("Start with a question like:")
@@ -179,9 +179,9 @@ struct ChatView: View {
                 .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(GlyphUI.Space.s12)
         .background(Color(NSColor.controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: GlyphUI.Radius.medium, style: .continuous))
     }
 
     private func showWelcomeMessageIfNeeded() {
@@ -274,19 +274,19 @@ struct ChatBubble: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: GlyphUI.Space.s4) {
                 Text(message.text)
                     .textSelection(.enabled)
                 Text(message.timestamp, style: .time)
                     .font(.caption2)
                     .foregroundColor(message.isUser ? .white.opacity(0.75) : .secondary)
             }
-            .padding(10)
+            .padding(GlyphUI.Space.s10)
             .background(message.isUser ? Color.accentColor : Color(NSColor.windowBackgroundColor))
             .foregroundColor(message.isUser ? .white : .primary)
-            .cornerRadius(12)
+            .cornerRadius(GlyphUI.Space.s12)
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: GlyphUI.Space.s12)
                     .stroke(Color.secondary.opacity(0.1), lineWidth: 1)
             )
 

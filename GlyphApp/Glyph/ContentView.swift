@@ -8,15 +8,51 @@
 import SwiftUI
 import AppKit
 
+enum GlyphUI {
+    enum Space {
+        static let s4: CGFloat = 4
+        static let s6: CGFloat = 6
+        static let s8: CGFloat = 8
+        static let s10: CGFloat = 10
+        static let s12: CGFloat = 12
+        static let s16: CGFloat = 16
+        static let s20: CGFloat = 20
+        static let s24: CGFloat = 24
+    }
+
+    enum Radius {
+        static let small: CGFloat = 6
+        static let medium: CGFloat = 10
+        static let large: CGFloat = 16
+    }
+
+    enum Layout {
+        static let titlebarLift: CGFloat = 42
+        static let contentTopInset: CGFloat = 8
+        static let sidebarMinWidth: CGFloat = 200
+        static let sidebarIdealWidth: CGFloat = 250
+        static let sidebarMaxWidth: CGFloat = 400
+        static let chatSidebarWidth: CGFloat = 360
+        static let chatPopupWidth: CGFloat = 500
+        static let chatPopupHeight: CGFloat = 620
+        static let chatPopupMinWidth: CGFloat = 420
+        static let chatPopupMinHeight: CGFloat = 420
+        static let chatPopupFrameAutosaveName = "GlyphChatPopupFrame"
+    }
+}
+
 struct ContentView: View {
     @StateObject private var client = GlyphClient()
-    private let titlebarLift: CGFloat = 42
-    private let contentTopInset: CGFloat = 8
+    @AppStorage("glyph.sidebar.width") private var sidebarWidthRaw = Double(GlyphUI.Layout.sidebarIdealWidth)
+    @AppStorage("glyph.chat.sidebar.visible") private var persistedChatSidebarVisible = false
+    @AppStorage("glyph.chat.popup.visible") private var persistedChatPopupVisible = false
+    @AppStorage("glyph.chat.popup.pinned") private var persistedChatPopupPinned = false
 
     // UI State
     @State private var selectedPath: String?
     @State private var openFiles: [String] = []
     @State private var activeFile: String?
+    @State private var sidebarWidth = GlyphUI.Layout.sidebarIdealWidth
     @State private var sidebarMode: SidebarMode = .files
     @AppStorage("glyph.sidebar.mode") private var sidebarModeRawValue = SidebarMode.files.rawValue
     @State private var didApplyLaunchConfiguration = false
@@ -80,13 +116,13 @@ struct ContentView: View {
                                     .fill(sidebarMode == mode ? Color.accentColor : Color.clear)
                                     .frame(height: 1)
                             }
-                            .padding(.top, 4)
-                            .padding(.bottom, 4)
+                            .padding(.top, GlyphUI.Space.s4)
+                            .padding(.bottom, GlyphUI.Space.s4)
                         }
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, GlyphUI.Space.s8)
                 .accessibilityIdentifier("sidebar.mode")
                 .overlay(
                     Rectangle()
@@ -102,8 +138,8 @@ struct ContentView: View {
                         .lineLimit(1)
                     Spacer()
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 4)
+                .padding(.horizontal, GlyphUI.Space.s10)
+                .padding(.bottom, GlyphUI.Space.s4)
 
                 switch sidebarMode {
                 case .files:
@@ -116,7 +152,12 @@ struct ContentView: View {
                 }
             }
             .background(Color(NSColor.controlBackgroundColor))
-            .navigationSplitViewColumnWidth(min: 200, ideal: 250, max: 400)
+            .background(SidebarWidthMonitor(sidebarWidth: $sidebarWidth))
+            .navigationSplitViewColumnWidth(
+                min: GlyphUI.Layout.sidebarMinWidth,
+                ideal: sidebarWidth,
+                max: GlyphUI.Layout.sidebarMaxWidth
+            )
         } detail: {
             ZStack(alignment: .topTrailing) {
                 HStack(spacing: 0) {
@@ -152,24 +193,38 @@ struct ContentView: View {
                 .help(isChatSidebarVisible ? "Hide chat sidebar" : "Show chat sidebar")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.secondary)
-                .padding(.top, 6)
-                .padding(.trailing, 12)
+                .padding(.top, GlyphUI.Space.s6)
+                .padding(.trailing, GlyphUI.Space.s12)
                 .accessibilityLabel(isChatSidebarVisible ? "Hide Chat Sidebar" : "Show Chat Sidebar")
                 .accessibilityIdentifier("chat.sidebar.toggle")
 
             }
         }
-        .padding(.top, contentTopInset - titlebarLift)
+        .padding(.top, GlyphUI.Layout.contentTopInset - GlyphUI.Layout.titlebarLift)
         .toolbar(removing: .sidebarToggle)
         .toolbarVisibility(.hidden, for: .windowToolbar)
         .background(MainWindowConfigurator())
         .ignoresSafeArea(.container, edges: .top)
         .onAppear {
+            sidebarWidth = clampedSidebarWidth(CGFloat(sidebarWidthRaw))
             sidebarMode = SidebarMode(rawValue: sidebarModeRawValue) ?? .files
             applyLaunchConfigurationIfNeeded()
         }
         .onChange(of: sidebarMode) { _, newMode in
             sidebarModeRawValue = newMode.rawValue
+        }
+        .onChange(of: sidebarWidth) { _, newWidth in
+            let clamped = clampedSidebarWidth(newWidth)
+            if abs(clamped - sidebarWidth) > 0.5 {
+                sidebarWidth = clamped
+            }
+            sidebarWidthRaw = Double(clamped)
+        }
+        .onChange(of: isChatSidebarVisible) { _, isVisible in
+            persistedChatSidebarVisible = isVisible
+        }
+        .onChange(of: isChatPopupVisible) { _, isVisible in
+            persistedChatPopupVisible = isVisible
         }
         .onChange(of: selectedPath) { _, newPath in
             if let path = newPath {
@@ -197,7 +252,7 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundColor(.secondary)
         }
-        .padding(24)
+        .padding(GlyphUI.Space.s24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             LinearGradient(
@@ -262,7 +317,7 @@ struct ContentView: View {
                 .accessibilityIdentifier("chat.sidebar.close")
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.vertical, GlyphUI.Space.s6)
             .overlay(
                 Rectangle()
                     .frame(height: 1)
@@ -272,7 +327,7 @@ struct ContentView: View {
 
             ChatView(client: client, showsInlineHeader: false, contextFiles: chatContextFiles)
         }
-        .frame(width: 360)
+        .frame(width: GlyphUI.Layout.chatSidebarWidth)
         .background(Color(NSColor.controlBackgroundColor))
         .accessibilityIdentifier("chat.sidebar")
     }
@@ -304,7 +359,7 @@ struct ContentView: View {
             return
         }
 
-        let popupSize = NSSize(width: 500, height: 620)
+        let popupSize = NSSize(width: GlyphUI.Layout.chatPopupWidth, height: GlyphUI.Layout.chatPopupHeight)
         let popupWindow = NSWindow(
             contentRect: NSRect(origin: .zero, size: popupSize),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
@@ -312,7 +367,7 @@ struct ContentView: View {
             defer: false
         )
         popupWindow.title = "Conversation"
-        popupWindow.minSize = NSSize(width: 420, height: 420)
+        popupWindow.minSize = NSSize(width: GlyphUI.Layout.chatPopupMinWidth, height: GlyphUI.Layout.chatPopupMinHeight)
         popupWindow.setContentSize(popupSize)
         popupWindow.isReleasedWhenClosed = false
         popupWindow.titleVisibility = .hidden
@@ -321,26 +376,32 @@ struct ContentView: View {
         popupWindow.isMovableByWindowBackground = true
         popupWindow.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
         popupWindow.backgroundColor = NSColor.windowBackgroundColor
+        let frameAutosaveName = NSWindow.FrameAutosaveName(GlyphUI.Layout.chatPopupFrameAutosaveName)
+        let didRestoreFrame = popupWindow.setFrameUsingName(frameAutosaveName)
+        _ = popupWindow.setFrameAutosaveName(frameAutosaveName)
+        popupWindow.level = persistedChatPopupPinned ? .floating : .normal
 
         let popupContent = DetachedChatWindowView(
             client: client,
             contextFiles: chatContextFiles,
+            initialPinned: persistedChatPopupPinned,
             onDock: { dockChatPopupToSidebar() },
             onClose: { closeChatPopupWindow() },
             onPinChanged: { isPinned in
+                persistedChatPopupPinned = isPinned
                 popupWindow.level = isPinned ? .floating : .normal
             }
         )
         popupWindow.contentViewController = NSHostingController(rootView: popupContent)
 
-        if let parentWindow = NSApp.keyWindow ?? NSApp.mainWindow {
+        if !didRestoreFrame, let parentWindow = NSApp.keyWindow ?? NSApp.mainWindow {
             let parentFrame = parentWindow.frame
             let proposedOrigin = NSPoint(
                 x: parentFrame.maxX - popupSize.width - 28,
                 y: parentFrame.maxY - popupSize.height - 54
             )
             popupWindow.setFrameOrigin(proposedOrigin)
-        } else {
+        } else if !didRestoreFrame {
             popupWindow.center()
         }
 
@@ -364,7 +425,7 @@ struct ContentView: View {
             isChatPopupVisible = false
             return
         }
-        popupWindow.level = .normal
+        popupWindow.level = persistedChatPopupPinned ? .floating : .normal
         popupWindow.close()
         #endif
     }
@@ -381,6 +442,9 @@ struct ContentView: View {
     private func applyLaunchConfigurationIfNeeded() {
         guard !didApplyLaunchConfiguration else { return }
         didApplyLaunchConfiguration = true
+
+        isChatSidebarVisible = persistedChatSidebarVisible
+        isChatPopupVisible = persistedChatPopupVisible
 
         let env = ProcessInfo.processInfo.environment
         if let modeRaw = env["GLYPH_TEST_SIDEBAR_MODE"] {
@@ -403,12 +467,97 @@ struct ContentView: View {
             if env["GLYPH_TEST_CHAT_PRESENTATION"] == "popup" {
                 isChatPopupVisible = true
                 isChatSidebarVisible = false
-                showChatPopupWindow()
             } else {
                 isChatSidebarVisible = true
                 isChatPopupVisible = false
-                closeChatPopupWindow()
             }
+        }
+
+        if isChatPopupVisible {
+            isChatSidebarVisible = false
+            showChatPopupWindow()
+        } else {
+            closeChatPopupWindow()
+        }
+    }
+
+    private func clampedSidebarWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, GlyphUI.Layout.sidebarMinWidth), GlyphUI.Layout.sidebarMaxWidth)
+    }
+}
+
+private struct SidebarWidthMonitor: NSViewRepresentable {
+    @Binding var sidebarWidth: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        context.coordinator.attach(to: view, sidebarWidth: $sidebarWidth)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.attach(to: nsView, sidebarWidth: $sidebarWidth)
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.stop()
+    }
+
+    final class Coordinator {
+        private weak var hostView: NSView?
+        private var timer: Timer?
+        private var sidebarWidthBinding: Binding<CGFloat>?
+        private var lastWidth: CGFloat = .zero
+
+        func attach(to view: NSView, sidebarWidth: Binding<CGFloat>) {
+            hostView = view
+            sidebarWidthBinding = sidebarWidth
+            guard timer == nil else { return }
+            timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+                self?.poll()
+            }
+            timer?.tolerance = 0.08
+        }
+
+        func stop() {
+            timer?.invalidate()
+            timer = nil
+            sidebarWidthBinding = nil
+            hostView = nil
+        }
+
+        private func poll() {
+            guard let hostView else { return }
+            guard let splitView = findSplitView(startingAt: hostView) else { return }
+            guard splitView.subviews.count >= 2 else { return }
+            let width = splitView.subviews[0].frame.width
+            guard width > 0 else { return }
+            if abs(width - lastWidth) > 0.5 {
+                lastWidth = width
+                guard let sidebarWidthBinding else { return }
+                if abs(sidebarWidthBinding.wrappedValue - width) > 0.5 {
+                    sidebarWidthBinding.wrappedValue = width
+                }
+            }
+        }
+
+        private func findSplitView(startingAt view: NSView) -> NSSplitView? {
+            var node: NSView? = view
+            while let current = node {
+                if let split = current as? NSSplitView {
+                    return split
+                }
+                node = current.superview
+            }
+            return nil
+        }
+
+        deinit {
+            stop()
         }
     }
 }
@@ -442,10 +591,28 @@ private struct MainWindowConfigurator: NSViewRepresentable {
 private struct DetachedChatWindowView: View {
     @ObservedObject var client: GlyphClient
     let contextFiles: [String]
+    let initialPinned: Bool
     let onDock: () -> Void
     let onClose: () -> Void
     let onPinChanged: (Bool) -> Void
-    @State private var isPinned = false
+    @State private var isPinned: Bool
+
+    init(
+        client: GlyphClient,
+        contextFiles: [String],
+        initialPinned: Bool,
+        onDock: @escaping () -> Void,
+        onClose: @escaping () -> Void,
+        onPinChanged: @escaping (Bool) -> Void
+    ) {
+        self.client = client
+        self.contextFiles = contextFiles
+        self.initialPinned = initialPinned
+        self.onDock = onDock
+        self.onClose = onClose
+        self.onPinChanged = onPinChanged
+        _isPinned = State(initialValue: initialPinned)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -496,7 +663,7 @@ private struct DetachedChatWindowView: View {
                 .accessibilityIdentifier("chat.popup.close")
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.vertical, GlyphUI.Space.s8)
             .background(Color(NSColor.controlBackgroundColor))
             .overlay(
                 Rectangle()
@@ -508,7 +675,12 @@ private struct DetachedChatWindowView: View {
             ChatView(client: client, showsInlineHeader: false, contextFiles: contextFiles)
                 .accessibilityIdentifier("chat.popup")
         }
-        .frame(minWidth: 420, idealWidth: 500, minHeight: 420, idealHeight: 620)
+        .frame(
+            minWidth: GlyphUI.Layout.chatPopupMinWidth,
+            idealWidth: GlyphUI.Layout.chatPopupWidth,
+            minHeight: GlyphUI.Layout.chatPopupMinHeight,
+            idealHeight: GlyphUI.Layout.chatPopupHeight
+        )
         .background(Color(NSColor.windowBackgroundColor))
     }
 }

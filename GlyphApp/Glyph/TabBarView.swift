@@ -14,7 +14,7 @@ struct TabBarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: GlyphUI.Space.s8) {
                 Label("\(openFiles.count) open", systemImage: "doc.on.doc")
                     .font(.caption)
                     .foregroundColor(.secondary)
@@ -29,12 +29,12 @@ struct TabBarView: View {
                 .buttonStyle(.plain)
                 .help("Close all tabs")
             }
-            .padding(.horizontal, 10)
-            .padding(.top, 6)
-            .padding(.bottom, 4)
+            .padding(.horizontal, GlyphUI.Space.s10)
+            .padding(.top, GlyphUI.Space.s6)
+            .padding(.bottom, GlyphUI.Space.s4)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: GlyphUI.Space.s6) {
                     ForEach(openFiles, id: \.self) { file in
                         TabItemView(
                             path: file,
@@ -44,8 +44,8 @@ struct TabBarView: View {
                         )
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 6)
+                .padding(.horizontal, GlyphUI.Space.s8)
+                .padding(.bottom, GlyphUI.Space.s6)
             }
         }
         .frame(minHeight: 36)
@@ -83,7 +83,7 @@ struct TabItemView: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: GlyphUI.Space.s8) {
             Image(systemName: iconName)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(iconColor)
@@ -105,14 +105,14 @@ struct TabItemView: View {
             .allowsHitTesting(isHovering || isActive)
             .accessibilityLabel("Close \(fileName)")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, GlyphUI.Space.s10)
+        .padding(.vertical, GlyphUI.Space.s6)
         .background(backgroundColor)
         .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
+            RoundedRectangle(cornerRadius: GlyphUI.Radius.small, style: .continuous)
                 .stroke(borderColor, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: GlyphUI.Radius.small, style: .continuous))
         .contentShape(Rectangle())
         .onTapGesture { onSelect() }
         .onHover { isHovering = $0 }
