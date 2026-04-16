@@ -1,9 +1,9 @@
-title: Xi-Editor
+title: Xi-Editor Archived Docs
 description: >
-  A modern editor with a backend written in Rust.
+  Historical xi-editor documentation preserved alongside current Glyph development.
 
 baseurl: "/xi-editor"
-url: "http://abishov.com"
+url: ""
 
 markdown: kramdown
 

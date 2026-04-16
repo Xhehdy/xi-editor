@@ -31,6 +31,8 @@ enum UiToCore: Codable {
         baseRevision: UInt64
     )
     case getContent(viewId: UInt64)
+    case getBufferStatus(viewId: UInt64)
+    case reloadFromDisk(viewId: UInt64)
     case chat(message: String, contextFiles: [String])
     case requestCompletion(viewId: UInt64, position: Int)
     case indexFile(path: String)
@@ -50,7 +52,8 @@ enum UiToCore: Codable {
     case queryGraphContext(query: String, contextFiles: [String]?, limit: Int?)
 
     private enum CodingKeys: String, CodingKey {
-        case Hello, NewView, CloseView, Input, ApplyEdit, GetContent, Chat, RequestCompletion
+        case Hello, NewView, CloseView, Input, ApplyEdit, GetContent, GetBufferStatus, ReloadFromDisk
+        case Chat, RequestCompletion
         case IndexFile, QueueIndexFile, FlushIndexQueue, GetIndexQueueStats
         case QuerySymbols, SearchSymbols, QueryGraphFile, SearchGraph, QueryGraphContext
         case client_version, capabilities, path, view_id, event, message
@@ -87,6 +90,12 @@ enum UiToCore: Codable {
             try nested.encode(baseRevision, forKey: .base_revision)
         case .getContent(let viewId):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GetContent)
+            try nested.encode(viewId, forKey: .view_id)
+        case .getBufferStatus(let viewId):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GetBufferStatus)
+            try nested.encode(viewId, forKey: .view_id)
+        case .reloadFromDisk(let viewId):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .ReloadFromDisk)
             try nested.encode(viewId, forKey: .view_id)
         case .chat(let message, let contextFiles):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Chat)
@@ -162,6 +171,12 @@ enum UiToCore: Codable {
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GetContent) {
             let viewId = try nested.decode(UInt64.self, forKey: .view_id)
             self = .getContent(viewId: viewId)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .GetBufferStatus) {
+            let viewId = try nested.decode(UInt64.self, forKey: .view_id)
+            self = .getBufferStatus(viewId: viewId)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .ReloadFromDisk) {
+            let viewId = try nested.decode(UInt64.self, forKey: .view_id)
+            self = .reloadFromDisk(viewId: viewId)
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Chat) {
             let message = try nested.decode(String.self, forKey: .message)
             let contextFiles = try nested.decode([String].self, forKey: .context_files)
@@ -374,6 +389,20 @@ struct IndexQueueStatsInfo: Codable, Sendable, Equatable {
     }
 }
 
+struct BufferStatusInfo: Codable, Sendable, Equatable {
+    let path: String?
+    let isDirty: Bool
+    let hasExternalChanges: Bool
+    let canSave: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case isDirty = "is_dirty"
+        case hasExternalChanges = "has_external_changes"
+        case canSave = "can_save"
+    }
+}
+
 enum CoreErrorCode: String, Codable, Sendable {
     case unknown = "UNKNOWN"
     case invalidRequest = "INVALID_REQUEST"
@@ -385,6 +414,10 @@ enum CoreErrorCode: String, Codable, Sendable {
     case deserializeFailed = "DESERIALIZE_FAILED"
     case frameTooLarge = "FRAME_TOO_LARGE"
     case fileReadFailed = "FILE_READ_FAILED"
+    case saveFailed = "SAVE_FAILED"
+    case reloadFailed = "RELOAD_FAILED"
+    case fileModifiedOnDisk = "FILE_MODIFIED_ON_DISK"
+    case saveUnavailable = "SAVE_UNAVAILABLE"
     case llmFailure = "LLM_FAILURE"
     case completionTimeout = "COMPLETION_TIMEOUT"
     case indexingFailed = "INDEXING_FAILED"
@@ -409,6 +442,8 @@ enum CoreToUi: Codable, Sendable {
     case applyPatch(viewId: UInt64, patch: Patch, revision: UInt64)
     case applyHighlights(viewId: UInt64, spans: [HighlightSpan])
     case setContent(viewId: UInt64, content: String, spans: [HighlightSpan], revision: UInt64)
+    case bufferStatus(viewId: UInt64, status: BufferStatusInfo)
+    case saved(viewId: UInt64, revision: UInt64, status: BufferStatusInfo)
     case chatToken(token: String, done: Bool)
     case ghostText(viewId: UInt64, text: String)
     case fileIndexed(path: String, symbolCount: Int)
@@ -422,11 +457,12 @@ enum CoreToUi: Codable, Sendable {
     case error(message: String, code: CoreErrorCode, retryable: Bool, shouldResync: Bool)
 
     private enum CodingKeys: String, CodingKey {
-        case Welcome, ViewCreated, ApplyPatch, ApplyHighlights, SetContent, ChatToken, GhostText
+        case Welcome, ViewCreated, ApplyPatch, ApplyHighlights, SetContent, BufferStatus, Saved
+        case ChatToken, GhostText
         case FileIndexed, IndexQueued, IndexQueueFlushed, IndexQueueStats
         case Symbols, GraphData, GraphContext, Event, Error
         case core_version, view_id, content, patch, spans, token, done, text, message, symbols
-        case path, symbol_count, revision
+        case path, symbol_count, revision, status
         case queued_count, debounce_ms, cancelled, stats
         case nodes, edges, summary, items
         case code, retryable, should_resync
@@ -458,6 +494,15 @@ enum CoreToUi: Codable, Sendable {
             let spans = try nested.decode([HighlightSpan].self, forKey: .spans)
             let revision = try nested.decode(UInt64.self, forKey: .revision)
             self = .setContent(viewId: viewId, content: content, spans: spans, revision: revision)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .BufferStatus) {
+            let viewId = try nested.decode(UInt64.self, forKey: .view_id)
+            let status = try nested.decode(BufferStatusInfo.self, forKey: .status)
+            self = .bufferStatus(viewId: viewId, status: status)
+        } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Saved) {
+            let viewId = try nested.decode(UInt64.self, forKey: .view_id)
+            let revision = try nested.decode(UInt64.self, forKey: .revision)
+            let status = try nested.decode(BufferStatusInfo.self, forKey: .status)
+            self = .saved(viewId: viewId, revision: revision, status: status)
         } else if let nested = try? container.nestedContainer(keyedBy: CodingKeys.self, forKey: .ChatToken) {
             let token = try nested.decode(String.self, forKey: .token)
             let done = try nested.decode(Bool.self, forKey: .done)
@@ -537,6 +582,15 @@ enum CoreToUi: Codable, Sendable {
             try nested.encode(content, forKey: .content)
             try nested.encode(spans, forKey: .spans)
             try nested.encode(revision, forKey: .revision)
+        case .bufferStatus(let viewId, let status):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .BufferStatus)
+            try nested.encode(viewId, forKey: .view_id)
+            try nested.encode(status, forKey: .status)
+        case .saved(let viewId, let revision, let status):
+            var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .Saved)
+            try nested.encode(viewId, forKey: .view_id)
+            try nested.encode(revision, forKey: .revision)
+            try nested.encode(status, forKey: .status)
         case .chatToken(let token, let done):
             var nested = container.nestedContainer(keyedBy: CodingKeys.self, forKey: .ChatToken)
             try nested.encode(token, forKey: .token)

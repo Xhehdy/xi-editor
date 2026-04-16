@@ -6,6 +6,10 @@ is_site_nav_category: true
 site_nav_category: docs
 ---
 
+This section is an archive of historical Xi documentation preserved in this repository.
+
+For current Glyph setup and workflow information, use `README.md` at the repo root and `glyph/README.md`.
+
 ### Table of Contents:
  - [Notes on writing frontends](docs/frontend-notes.html)
  - [The Xi Protocol](docs/frontend-protocol.html)

@@ -304,6 +304,17 @@ impl Buffer {
     pub fn mark_saved(&mut self) {
         self.dirty = false;
     }
+
+    /// Replaces the entire buffer content with disk-authoritative text.
+    ///
+    /// This clears undo/redo history because the new content may not be
+    /// derivable from the prior edit stream.
+    pub fn replace_all(&mut self, new_content: &str) {
+        self.rope = Rope::from(new_content);
+        self.dirty = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
 }
 
 #[cfg(test)]
@@ -366,5 +377,19 @@ mod tests {
 
         let _ = buffer.redo().unwrap();
         assert_eq!(buffer.content(), "hi 🌍\n");
+    }
+
+    #[test]
+    fn test_replace_all_resets_dirty_and_history() {
+        let mut buffer = Buffer::new(BufferId(5), "draft");
+        let _ = buffer.edit(5..5, " change").unwrap();
+        assert!(buffer.is_dirty());
+
+        buffer.replace_all("disk");
+
+        assert_eq!(buffer.content(), "disk");
+        assert!(!buffer.is_dirty());
+        assert!(buffer.undo().unwrap().is_none());
+        assert!(buffer.redo().unwrap().is_none());
     }
 }

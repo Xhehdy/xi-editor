@@ -53,6 +53,10 @@ pub enum UiToCore {
     },
     /// Request current buffer content
     GetContent { view_id: ViewId },
+    /// Request current buffer file/save status
+    GetBufferStatus { view_id: ViewId },
+    /// Reload a file-backed buffer from disk
+    ReloadFromDisk { view_id: ViewId },
     /// Send a chat message
     Chat {
         message: String,
@@ -119,11 +123,27 @@ pub enum ErrorCode {
     DeserializeFailed,
     FrameTooLarge,
     FileReadFailed,
+    SaveFailed,
+    ReloadFailed,
+    FileModifiedOnDisk,
+    SaveUnavailable,
     LlmFailure,
     CompletionTimeout,
     IndexingFailed,
     IndexQueueFull,
     GraphQueryFailed,
+}
+
+/// File/save state for a buffer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BufferStatusInfo {
+    pub path: Option<String>,
+    #[serde(default)]
+    pub is_dirty: bool,
+    #[serde(default)]
+    pub has_external_changes: bool,
+    #[serde(default)]
+    pub can_save: bool,
 }
 
 /// Messages sent from Core to UI
@@ -154,6 +174,17 @@ pub enum CoreToUi {
         content: String,
         spans: Vec<HighlightSpan>,
         revision: u64,
+    },
+    /// Current file/save state for a buffer
+    BufferStatus {
+        view_id: ViewId,
+        status: BufferStatusInfo,
+    },
+    /// Save completed successfully
+    Saved {
+        view_id: ViewId,
+        revision: u64,
+        status: BufferStatusInfo,
     },
     /// Streaming chat response
     ChatToken { token: String, done: bool },
@@ -361,6 +392,55 @@ mod tests {
                 inserted_text,
                 base_revision: 7,
             } if inserted_text == "hello"
+        ));
+    }
+
+    #[test]
+    fn test_roundtrip_buffer_status_messages() {
+        let status_query = UiToCore::GetBufferStatus {
+            view_id: ViewId(9),
+        };
+        let bytes = serialize_json(&status_query).unwrap();
+        let decoded: UiToCore = deserialize_json(&bytes).unwrap();
+        assert!(matches!(
+            decoded,
+            UiToCore::GetBufferStatus { view_id: ViewId(9) }
+        ));
+
+        let reload = UiToCore::ReloadFromDisk {
+            view_id: ViewId(10),
+        };
+        let reload_bytes = serialize(&reload).unwrap();
+        let reload_decoded: UiToCore = deserialize(&reload_bytes).unwrap();
+        assert!(matches!(
+            reload_decoded,
+            UiToCore::ReloadFromDisk { view_id: ViewId(10) }
+        ));
+
+        let response = CoreToUi::Saved {
+            view_id: ViewId(11),
+            revision: 7,
+            status: BufferStatusInfo {
+                path: Some("src/lib.rs".to_string()),
+                is_dirty: false,
+                has_external_changes: false,
+                can_save: true,
+            },
+        };
+        let response_bytes = serialize_json(&response).unwrap();
+        let response_decoded: CoreToUi = deserialize_json(&response_bytes).unwrap();
+        assert!(matches!(
+            response_decoded,
+            CoreToUi::Saved {
+                view_id: ViewId(11),
+                revision: 7,
+                status: BufferStatusInfo {
+                    path: Some(path),
+                    is_dirty: false,
+                    has_external_changes: false,
+                    can_save: true,
+                },
+            } if path == "src/lib.rs"
         ));
     }
 

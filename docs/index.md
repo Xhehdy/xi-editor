@@ -9,8 +9,10 @@ site_nav_category_order: 1
 
 <div class="mdl-grid docs-content-wrapper mdl-grid--no-spacing">
   <div class="mdl-cell mdl-cell--6-col">
-    <h1>Xi-Editor</h1>
+    <h1>Xi-Editor Archived Docs</h1>
     <p><em>(pronounced "Zigh")</em></p>
+
+    <p><strong>Archive notice.</strong> These pages document the historical xi-editor project preserved in this repository. For the current Glyph implementation in this checkout, start with <code>README.md</code> at the repo root and <code>glyph/README.md</code>.</p>
 
     <p>The xi editor project is an attempt to build a high quality text editor, using modern software engineering
     techniques. It is initially built for macOS, using Cocoa for the user interface. There are also frontends for
@@ -33,8 +35,7 @@ site_nav_category_order: 1
     by adding plug-ins or hacking on the core.</p></li>
     </ul>
 
-    <p>Please refer to the <a href="https://github.com/xi-editor/xi-editor/issues/937">October 2018 roadmap</a>
-    to learn more about planned features.</p>
+    <p>These pages are preserved for architecture, protocol, and design reference.</p>
   </div>
 
   <div class="mdl-cell mdl-cell--6-col">

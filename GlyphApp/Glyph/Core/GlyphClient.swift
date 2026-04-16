@@ -26,13 +26,16 @@ final class GlyphClient: ObservableObject {
     private let decoder = JSONDecoder()
     private let ioQueue = DispatchQueue(label: "com.glyph.core-connection.io")
     private var viewRevisions: [UInt64: UInt64] = [:]
+    private var viewPaths: [UInt64: String] = [:]
     private var managedCoreProcess: Process?
+    private var connectTask: Task<Void, Never>?
 
     @Published private(set) var isConnected = false
     @Published private(set) var coreVersion: String?
     @Published private(set) var lastError: String?
     @Published private(set) var connectionStatus: ConnectionStatus = .disconnected
     @Published private(set) var lastGraphContext: ChatGraphContextSnapshot?
+    @Published private(set) var bufferStatuses: [UInt64: BufferStatusInfo] = [:]
 
     enum ConnectionStatus: String {
         case disconnected = "Disconnected"
@@ -47,9 +50,28 @@ final class GlyphClient: ObservableObject {
 
     /// Connects to the core and sends hello
     func connect() async {
+        if isConnected {
+            return
+        }
+        if let connectTask {
+            await connectTask.value
+            return
+        }
+
+        let task = Task { @MainActor in
+            defer { self.connectTask = nil }
+            await self.performConnect()
+        }
+        connectTask = task
+        await task.value
+    }
+
+    private func performConnect() async {
         connectionStatus = .connecting
         lastError = nil
         viewRevisions.removeAll()
+        viewPaths.removeAll()
+        bufferStatuses.removeAll()
 
         do {
             try await connectAndHandshake()
@@ -70,6 +92,8 @@ final class GlyphClient: ObservableObject {
 
     /// Disconnects from the core
     func disconnect() {
+        connectTask?.cancel()
+        connectTask = nil
         ioQueue.async { [connection] in
             connection.disconnect()
         }
@@ -78,6 +102,8 @@ final class GlyphClient: ObservableObject {
         coreVersion = nil
         connectionStatus = .disconnected
         viewRevisions.removeAll()
+        viewPaths.removeAll()
+        bufferStatuses.removeAll()
     }
 
     /// Creates a new view, optionally loading a file
@@ -87,12 +113,17 @@ final class GlyphClient: ObservableObject {
             throw errorFrom(response: response)
         }
         viewRevisions[viewId] = revision
+        if let path {
+            viewPaths[viewId] = path
+        }
         return (viewId, content)
     }
 
     func closeView(viewId: UInt64) async throws {
         _ = try await send(.closeView(viewId: viewId))
         viewRevisions.removeValue(forKey: viewId)
+        viewPaths.removeValue(forKey: viewId)
+        bufferStatuses.removeValue(forKey: viewId)
     }
 
     /// Applies a single contiguous text edit at `startByteOffset`.
@@ -150,6 +181,54 @@ final class GlyphClient: ObservableObject {
         }
         viewRevisions[viewId] = revision
         return (content, spans)
+    }
+
+    func getBufferStatus(viewId: UInt64) async throws -> BufferStatusInfo {
+        let response = try await send(.getBufferStatus(viewId: viewId))
+        guard case .bufferStatus(let responseViewId, let status) = response, responseViewId == viewId else {
+            throw errorFrom(response: response)
+        }
+        bufferStatuses[viewId] = status
+        if let path = status.path {
+            viewPaths[viewId] = path
+        }
+        return status
+    }
+
+    func save(viewId: UInt64) async throws -> BufferStatusInfo {
+        let response = try await sendInput(viewId: viewId, event: .save)
+        guard case .saved(let responseViewId, let revision, let status) = response, responseViewId == viewId else {
+            throw errorFrom(response: response)
+        }
+        viewRevisions[viewId] = revision
+        bufferStatuses[viewId] = status
+        if let path = status.path {
+            viewPaths[viewId] = path
+        }
+        return status
+    }
+
+    func reloadFromDisk(viewId: UInt64) async throws -> (String, [HighlightSpan], BufferStatusInfo) {
+        let response = try await send(.reloadFromDisk(viewId: viewId))
+        guard case .setContent(let responseViewId, let content, let spans, let revision) = response,
+              responseViewId == viewId else {
+            throw errorFrom(response: response)
+        }
+        viewRevisions[viewId] = revision
+        let status = try await getBufferStatus(viewId: viewId)
+        return (content, spans, status)
+    }
+
+    func status(forViewId viewId: UInt64) -> BufferStatusInfo? {
+        bufferStatuses[viewId]
+    }
+
+    func status(forPath path: String) -> BufferStatusInfo? {
+        bufferStatuses.values.first(where: { $0.path == path })
+    }
+
+    func isDirty(path: String) -> Bool {
+        status(forPath: path)?.isDirty ?? false
     }
 
     /// Sends a chat message
@@ -275,6 +354,7 @@ final class GlyphClient: ObservableObject {
                 throw CoreConnectionError.invalidResponse
             }
             viewRevisions[responseViewId] = revision
+            markBufferDirty(viewId: responseViewId)
             return try patch.apply(to: currentContent)
         case .event(let event):
             switch event {
@@ -376,6 +456,19 @@ final class GlyphClient: ObservableObject {
         lastError = error.localizedDescription
         connectionStatus = .error
         isConnected = false
+        viewPaths.removeAll()
+        bufferStatuses.removeAll()
+    }
+
+    private func markBufferDirty(viewId: UInt64) {
+        let previous = bufferStatuses[viewId]
+        let path = previous?.path ?? viewPaths[viewId]
+        bufferStatuses[viewId] = BufferStatusInfo(
+            path: path,
+            isDirty: true,
+            hasExternalChanges: previous?.hasExternalChanges ?? false,
+            canSave: previous?.canSave ?? (path != nil)
+        )
     }
 
     private func shouldAttemptAutoLaunch(after error: Error) -> Bool {

@@ -8,6 +8,8 @@ is_site_nav_category: true
 
 ## Development
 
+This Jekyll site builds the archived Xi documentation preserved in this repository. It is not the primary home for current Glyph setup docs.
+
 You can run the site locally on your computer while making changes.
 
 ### Setup Ruby and Bundler
@@ -33,3 +35,5 @@ bundle exec jekyll serve
 ```
 
 Point your browser at [http://127.0.0.1:4000/xi-editor/](http://127.0.0.1:4000/xi-editor/).
+
+The `/xi-editor/` path is expected here because the site still uses its historical base URL.

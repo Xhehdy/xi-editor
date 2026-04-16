@@ -2,6 +2,11 @@
 
 > A performance-first, AI-native IDE built on **Xi Editor principles**, powered by a **Rust Core Engine**, designed for massive codebases, multi-agent intelligence, and long-term evolution.
 
+Current implementation note:
+- the live frontend direction in this repository is **macOS-native SwiftUI/AppKit**, not Tauri/webview
+- the current transport direction is a framed Unix-socket connection between the native app and the Rust core
+- treat the rest of this document as architecture direction, not a shipped feature checklist
+
 ---
 
 ## 1. CORE DESIGN PHILOSOPHY
@@ -21,9 +26,9 @@ Xi-inspired principle:
 ## 2. HIGH-LEVEL SYSTEM LAYERS
 
 ```
-UI Layer (Minimal, Reactive)
+UI Layer (SwiftUI / AppKit, macOS-native)
    ↓
-Editor Frontend (Xi-style thin client)
+Native Frontend (Xi-style thin client)
    ↓
 Intent & Orchestration Layer
    ↓
@@ -51,10 +56,11 @@ Responsibilities:
 - Capture user intent (typing, commands)
 
 ### 3.2 Frontend Technology
-- **Tauri** (desktop)
-- Thin UI shell
-- Webview for rendering
-- Web UI later for:
+- **macOS-native SwiftUI + AppKit**
+- Thin native shell over the Rust core
+- Unix sockets for framed core communication
+- Keep future frontends possible by preserving clean protocol boundaries
+- Optional web surfaces can still come later for:
   - agent monitoring
   - collaboration
   - project insights
@@ -385,4 +391,3 @@ Edges:
 Build the editor first.
 Then intelligence.
 Then magic.
-

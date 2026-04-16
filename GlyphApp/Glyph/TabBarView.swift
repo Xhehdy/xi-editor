@@ -11,6 +11,10 @@ import AppKit
 struct TabBarView: View {
     @Binding var openFiles: [String]
     @Binding var activeFile: String?
+    let dirtyPaths: Set<String>
+    let onSelectFile: (String) -> Void
+    let onCloseFile: (String) -> Void
+    let onCloseAllFiles: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,7 +24,7 @@ struct TabBarView: View {
                     .foregroundColor(.secondary)
                 Spacer()
                 Button {
-                    closeAllFiles()
+                    onCloseAllFiles()
                 } label: {
                     Image(systemName: "xmark.circle")
                         .font(.system(size: 13, weight: .medium))
@@ -39,8 +43,9 @@ struct TabBarView: View {
                         TabItemView(
                             path: file,
                             isActive: file == activeFile,
-                            onClose: { closeFile(file) },
-                            onSelect: { activeFile = file }
+                            isDirty: dirtyPaths.contains(file),
+                            onClose: { onCloseFile(file) },
+                            onSelect: { onSelectFile(file) }
                         )
                     }
                 }
@@ -57,26 +62,12 @@ struct TabBarView: View {
             alignment: .bottom
         )
     }
-
-    private func closeFile(_ path: String) {
-        let reducedState = TabBarState.reducedStateAfterClosing(
-            openFiles: openFiles,
-            activeFile: activeFile,
-            closing: path
-        )
-        openFiles = reducedState.openFiles
-        activeFile = reducedState.activeFile
-    }
-
-    private func closeAllFiles() {
-        openFiles.removeAll()
-        activeFile = nil
-    }
 }
 
 struct TabItemView: View {
     let path: String
     let isActive: Bool
+    let isDirty: Bool
     let onClose: () -> Void
     let onSelect: () -> Void
 
@@ -94,6 +85,12 @@ struct TabItemView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 180, alignment: .leading)
+
+            if isDirty {
+                Circle()
+                    .fill(Color.orange)
+                    .frame(width: 7, height: 7)
+            }
 
             Button(action: onClose) {
                 Image(systemName: "xmark.circle.fill")

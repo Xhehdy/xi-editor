@@ -41,6 +41,70 @@ enum GlyphUI {
     }
 }
 
+struct WorkspaceSessionSnapshot: Codable, Equatable {
+    let openFiles: [String]
+    let activeFile: String?
+}
+
+enum WorkspaceSessionState {
+    static func storageKey(rootPath: String) -> String {
+        let normalizedRoot = normalizedPath(rootPath) ?? rootPath
+        return "glyph.workspace.session.\(stableHash(normalizedRoot))"
+    }
+
+    static func normalizedSnapshot(
+        openFiles: [String],
+        activeFile: String?,
+        fileExists: (String) -> Bool
+    ) -> WorkspaceSessionSnapshot {
+        var seen = Set<String>()
+        var normalizedOpenFiles: [String] = []
+
+        for path in openFiles {
+            guard let normalized = normalizedPath(path),
+                  fileExists(normalized),
+                  seen.insert(normalized).inserted else {
+                continue
+            }
+            normalizedOpenFiles.append(normalized)
+        }
+
+        var normalizedActive = normalizedPath(activeFile)
+        if let normalizedActive,
+           fileExists(normalizedActive),
+           !seen.contains(normalizedActive) {
+            normalizedOpenFiles.append(normalizedActive)
+            seen.insert(normalizedActive)
+        }
+
+        if normalizedActive == nil || !normalizedOpenFiles.contains(normalizedActive!) {
+            normalizedActive = normalizedOpenFiles.last
+        }
+
+        return WorkspaceSessionSnapshot(
+            openFiles: normalizedOpenFiles,
+            activeFile: normalizedActive
+        )
+    }
+
+    private static func normalizedPath(_ path: String?) -> String? {
+        guard let path,
+              !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return URL(fileURLWithPath: path).standardizedFileURL.path
+    }
+
+    private static func stableHash(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+}
+
 struct ContentView: View {
     @StateObject private var client = GlyphClient()
     @AppStorage("glyph.sidebar.width") private var sidebarWidthRaw = Double(GlyphUI.Layout.sidebarIdealWidth)
@@ -60,6 +124,7 @@ struct ContentView: View {
     @State private var isChatPopupVisible = false
     @State private var chatPopupWindow: NSWindow?
     @State private var chatPopupCloseObserver: NSObjectProtocol?
+    @State private var unsavedGuardMessage: String?
 
     enum SidebarMode: String, CaseIterable, Hashable {
         case files, symbols
@@ -163,11 +228,28 @@ struct ContentView: View {
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
                         if !openFiles.isEmpty {
-                            TabBarView(openFiles: $openFiles, activeFile: $activeFile)
+                            TabBarView(
+                                openFiles: $openFiles,
+                                activeFile: $activeFile,
+                                dirtyPaths: dirtyOpenFiles,
+                                onSelectFile: attemptActivateFile,
+                                onCloseFile: attemptCloseFile,
+                                onCloseAllFiles: attemptCloseAllFiles
+                            )
 
                             if let file = activeFile {
-                                EditorView(client: client, filePath: file)
-                                    .id(file) // Force recreate on file change to reset state
+                                ZStack {
+                                    ForEach(openFiles, id: \.self) { openFile in
+                                        EditorView(
+                                            client: client,
+                                            filePath: openFile,
+                                            isActive: openFile == file
+                                        )
+                                        .opacity(openFile == file ? 1 : 0)
+                                        .allowsHitTesting(openFile == file)
+                                        .accessibilityHidden(openFile != file)
+                                    }
+                                }
                             } else {
                                 emptyState
                             }
@@ -226,13 +308,30 @@ struct ContentView: View {
         .onChange(of: isChatPopupVisible) { _, isVisible in
             persistedChatPopupVisible = isVisible
         }
+        .onChange(of: openFiles) { _, _ in
+            persistWorkspaceSession()
+        }
+        .onChange(of: activeFile) { _, _ in
+            persistWorkspaceSession()
+        }
         .onChange(of: selectedPath) { _, newPath in
             if let path = newPath {
-                openFile(path)
+                attemptOpenFile(path)
             }
         }
         .onDisappear {
             closeChatPopupWindow()
+        }
+        .alert(
+            "Unsaved changes",
+            isPresented: Binding(
+                get: { unsavedGuardMessage != nil },
+                set: { if !$0 { unsavedGuardMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(unsavedGuardMessage ?? "")
         }
         .accessibilityIdentifier("content.view")
     }
@@ -267,11 +366,109 @@ struct ContentView: View {
         .accessibilityIdentifier("empty.state")
     }
 
+    private var dirtyOpenFiles: Set<String> {
+        Set(openFiles.filter { client.isDirty(path: $0) })
+    }
+
     private func openFile(_ path: String) {
         if !openFiles.contains(path) {
             openFiles.append(path)
         }
         activeFile = path
+    }
+
+    private func attemptOpenFile(_ path: String) {
+        guard path != activeFile else { return }
+        openFile(path)
+        selectedPath = path
+    }
+
+    private func attemptActivateFile(_ path: String) {
+        guard path != activeFile else { return }
+        activeFile = path
+        selectedPath = path
+    }
+
+    private func attemptCloseFile(_ path: String) {
+        if blockIfPathIsDirty(path, reason: "closing this tab") {
+            return
+        }
+
+        let reducedState = TabBarState.reducedStateAfterClosing(
+            openFiles: openFiles,
+            activeFile: activeFile,
+            closing: path
+        )
+        openFiles = reducedState.openFiles
+        activeFile = reducedState.activeFile
+        selectedPath = reducedState.activeFile
+    }
+
+    private func attemptCloseAllFiles() {
+        if let firstDirtyPath = openFiles.first(where: { client.isDirty(path: $0) }) {
+            _ = blockIfPathIsDirty(firstDirtyPath, reason: "closing open tabs")
+            return
+        }
+        openFiles.removeAll()
+        activeFile = nil
+        selectedPath = nil
+    }
+
+    private func blockIfPathIsDirty(_ path: String, reason: String) -> Bool {
+        guard client.isDirty(path: path) else {
+            return false
+        }
+
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        unsavedGuardMessage = "Save or reload \(name) before \(reason)."
+        activeFile = path
+        selectedPath = path
+        return true
+    }
+
+    private var workspaceSessionKey: String {
+        WorkspaceSessionState.storageKey(rootPath: sidebarRootPath)
+    }
+
+    private func persistWorkspaceSession() {
+        let snapshot = WorkspaceSessionState.normalizedSnapshot(
+            openFiles: openFiles,
+            activeFile: activeFile,
+            fileExists: { FileManager.default.fileExists(atPath: $0) }
+        )
+        let defaults = UserDefaults.standard
+        if snapshot.openFiles.isEmpty {
+            defaults.removeObject(forKey: workspaceSessionKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(snapshot),
+              let json = String(data: data, encoding: .utf8) else {
+            return
+        }
+        defaults.set(json, forKey: workspaceSessionKey)
+    }
+
+    private func restoreWorkspaceSession() {
+        let defaults = UserDefaults.standard
+        guard let json = defaults.string(forKey: workspaceSessionKey),
+              let data = json.data(using: .utf8),
+              let snapshot = try? JSONDecoder().decode(WorkspaceSessionSnapshot.self, from: data) else {
+            return
+        }
+
+        let restored = WorkspaceSessionState.normalizedSnapshot(
+            openFiles: snapshot.openFiles,
+            activeFile: snapshot.activeFile,
+            fileExists: { FileManager.default.fileExists(atPath: $0) }
+        )
+        guard !restored.openFiles.isEmpty else {
+            defaults.removeObject(forKey: workspaceSessionKey)
+            return
+        }
+
+        openFiles = restored.openFiles
+        activeFile = restored.activeFile
+        selectedPath = restored.activeFile
     }
 
     private var chatContextFiles: [String] {
@@ -461,6 +658,8 @@ struct ContentView: View {
            FileManager.default.fileExists(atPath: bootFile) {
             openFile(bootFile)
             selectedPath = bootFile
+        } else {
+            restoreWorkspaceSession()
         }
 
         if env["GLYPH_TEST_CHAT_VISIBLE"] == "1" {

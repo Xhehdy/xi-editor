@@ -6,6 +6,12 @@ site_nav_category_order: 400
 is_site_nav_category: true
 ---
 
+> Archive notice: this page documents the historical xi-editor contribution model preserved in this repository.
+>
+> For current Glyph work in this checkout, start with `README.md`, `glyph/README.md`, and `.github/CONTRIBUTING.md`.
+>
+> The project/community links below are preserved as historical reference and should not be read as the default workflow for current Glyph development.
+
 The xi-editor project is committed to fostering and preserving a
 diverse, welcoming community; all participants are expected to
 follow the [Code of Conduct](https://github.com/xi-editor/xi-editor/blob/master/CODE_OF_CONDUCT.md).

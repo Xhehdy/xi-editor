@@ -119,6 +119,75 @@ struct GlyphTests {
         #expect(limit == 8)
     }
 
+    @Test func bufferStatusRoundtrip() throws {
+        let message = UiToCore.getBufferStatus(viewId: 42)
+        let encoded = try JSONEncoder().encode(message)
+        let raw = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let payload = try #require(raw["GetBufferStatus"] as? [String: Any])
+        #expect((payload["view_id"] as? Int) == 42)
+
+        let decoded = try JSONDecoder().decode(UiToCore.self, from: encoded)
+        guard case .getBufferStatus(let viewId) = decoded else {
+            Issue.record("Expected GetBufferStatus variant")
+            return
+        }
+
+        #expect(viewId == 42)
+    }
+
+    @Test func savedPayloadDecodesStatusMetadata() throws {
+        let payload = #"""
+        {"Saved":{"view_id":7,"revision":3,"status":{"path":"/tmp/demo.swift","is_dirty":false,"has_external_changes":true,"can_save":true}}}
+        """#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(CoreToUi.self, from: payload)
+
+        guard case .saved(let viewId, let revision, let status) = decoded else {
+            Issue.record("Expected Saved variant")
+            return
+        }
+
+        #expect(viewId == 7)
+        #expect(revision == 3)
+        #expect(status.path == "/tmp/demo.swift")
+        #expect(status.isDirty == false)
+        #expect(status.hasExternalChanges == true)
+        #expect(status.canSave == true)
+    }
+
+    @Test func workspaceSessionNormalizationDeduplicatesAndPreservesActiveFile() {
+        let snapshot = WorkspaceSessionState.normalizedSnapshot(
+            openFiles: [
+                "/tmp/project/../project/a.swift",
+                "/tmp/project/a.swift",
+                "/tmp/project/b.swift"
+            ],
+            activeFile: "/tmp/project/b.swift",
+            fileExists: { path in
+                path == "/tmp/project/a.swift" || path == "/tmp/project/b.swift"
+            }
+        )
+
+        #expect(snapshot.openFiles == ["/tmp/project/a.swift", "/tmp/project/b.swift"])
+        #expect(snapshot.activeFile == "/tmp/project/b.swift")
+    }
+
+    @Test func workspaceSessionNormalizationDropsMissingFilesAndFallsBackToLastOpenFile() {
+        let snapshot = WorkspaceSessionState.normalizedSnapshot(
+            openFiles: [
+                "/tmp/project/one.swift",
+                "/tmp/project/missing.swift",
+                "/tmp/project/two.swift"
+            ],
+            activeFile: "/tmp/project/gone.swift",
+            fileExists: { path in
+                path == "/tmp/project/one.swift" || path == "/tmp/project/two.swift"
+            }
+        )
+
+        #expect(snapshot.openFiles == ["/tmp/project/one.swift", "/tmp/project/two.swift"])
+        #expect(snapshot.activeFile == "/tmp/project/two.swift")
+    }
+
     @Test func decodeApplyPatchAndApplyToBuffer() throws {
         let payload = #"""
         {"ApplyPatch":{"view_id":42,"patch":{"ops":[{"Retain":6},{"Delete":6},{"Insert":"Glyph"}]},"revision":7}}

@@ -21,19 +21,36 @@ struct EditorView: View {
     @State private var cursorByteOffset = 0
     @State private var editPipeline: Task<Void, Never>?
     @State private var ghostTask: Task<Void, Never>?
+    @State private var autosaveTask: Task<Void, Never>?
+    @State private var statusRefreshTask: Task<Void, Never>?
     @State private var latestEditVersion: UInt64 = 0
     @State private var isSyncing = false
+    @State private var bufferStatus = BufferStatusInfo(
+        path: nil,
+        isDirty: false,
+        hasExternalChanges: false,
+        canSave: false
+    )
+    @State private var transientStatusMessage: String?
+    @State private var showReloadConfirmation = false
 
     let filePath: String?
+    let isActive: Bool
+
+    private enum SaveTrigger {
+        case manual
+        case autosave
+    }
 
     private enum HistoryAction {
         case undo
         case redo
     }
 
-    init(client: GlyphClient, filePath: String? = nil) {
+    init(client: GlyphClient, filePath: String? = nil, isActive: Bool = true) {
         self.client = client
         self.filePath = filePath
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -85,10 +102,17 @@ struct EditorView: View {
         .task {
             await connectAndLoad()
         }
+        .onChange(of: isActive) { _, active in
+            updateActivity(active)
+        }
         .onDisappear {
             ghostTask?.cancel()
+            autosaveTask?.cancel()
+            statusRefreshTask?.cancel()
             let pendingEdit = editPipeline
+            let pendingAutosave = autosaveTask
             Task {
+                await pendingAutosave?.value
                 await pendingEdit?.value
                 await closeViewIfNeeded()
             }
@@ -100,6 +124,13 @@ struct EditorView: View {
         errorMessage = nil
         inlineErrorMessage = nil
         ghostText = nil
+        transientStatusMessage = nil
+        bufferStatus = BufferStatusInfo(
+            path: filePath,
+            isDirty: false,
+            hasExternalChanges: false,
+            canSave: filePath != nil
+        )
 
         if shouldUseUITestStubEditor {
             let stub = """
@@ -111,6 +142,12 @@ struct EditorView: View {
             text = stub
             spans = []
             cursorByteOffset = stub.utf8.count
+            bufferStatus = BufferStatusInfo(
+                path: filePath,
+                isDirty: false,
+                hasExternalChanges: false,
+                canSave: filePath != nil
+            )
             isLoading = false
             return
         }
@@ -139,10 +176,15 @@ struct EditorView: View {
                 cursorByteOffset = initialContent.utf8.count
             }
 
+            if let status = try? await client.getBufferStatus(viewId: id) {
+                bufferStatus = status
+            }
+
             if let path = filePath {
                 try? await client.indexFile(path: path)
             }
 
+            updateActivity(isActive)
             isLoading = false
         } catch {
             errorMessage = error.localizedDescription
@@ -160,8 +202,15 @@ struct EditorView: View {
         self.cursorByteOffset = cursorByteOffset
         text = newText
         ghostText = nil
+        transientStatusMessage = nil
         latestEditVersion &+= 1
         let editVersion = latestEditVersion
+        bufferStatus = BufferStatusInfo(
+            path: bufferStatus.path ?? filePath,
+            isDirty: true,
+            hasExternalChanges: bufferStatus.hasExternalChanges,
+            canSave: bufferStatus.canSave || filePath != nil
+        )
 
         if let id = viewId, let edit = computeEdit(from: previousText, to: newText) {
             let previousTask = editPipeline
@@ -192,11 +241,13 @@ struct EditorView: View {
                         inlineErrorMessage = error.localizedDescription
                         isSyncing = false
                     }
+                    await refreshBufferStatus(silently: true)
                 }
             }
         }
 
         scheduleGhostTextRequest(position: cursorByteOffset)
+        scheduleAutosave()
     }
 
     private func scheduleGhostTextRequest(position: Int) {
@@ -225,9 +276,27 @@ struct EditorView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
+            if bufferStatus.isDirty {
+                Label("Unsaved", systemImage: "circle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+
+            if bufferStatus.hasExternalChanges {
+                Label("Disk changed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundColor(.red)
+            }
+
             if isSyncing {
                 Label("Syncing", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            if let transientStatusMessage {
+                Text(transientStatusMessage)
+                    .lineLimit(1)
                     .foregroundColor(.secondary)
             }
 
@@ -258,6 +327,26 @@ struct EditorView: View {
             .disabled(!canApplyHistoryAction)
             .help("Redo")
             .accessibilityIdentifier("editor.redo")
+
+            Button("Save") {
+                performSave()
+            }
+            .buttonStyle(.borderless)
+            .disabled(!bufferStatus.canSave || viewId == nil || isLoading || isSyncing)
+            .help("Save file")
+            .accessibilityIdentifier("editor.save")
+
+            Button("Reload") {
+                if bufferStatus.isDirty || bufferStatus.hasExternalChanges {
+                    showReloadConfirmation = true
+                } else {
+                    performReload()
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(!bufferStatus.canSave || viewId == nil || isLoading || isSyncing)
+            .help("Reload from disk")
+            .accessibilityIdentifier("editor.reload")
 
             Text("Ln \(cursorLocation.line), Col \(cursorLocation.column)")
                 .monospacedDigit()
@@ -294,6 +383,14 @@ struct EditorView: View {
                 .foregroundColor(Color(NSColor.separatorColor)),
             alignment: .top
         )
+        .alert("Reload from disk?", isPresented: $showReloadConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reload", role: .destructive) {
+                performReload()
+            }
+        } message: {
+            Text(reloadConfirmationMessage)
+        }
     }
 
     private var fileDisplayName: String {
@@ -305,6 +402,16 @@ struct EditorView: View {
 
     private var canApplyHistoryAction: Bool {
         viewId != nil && !isLoading && !isSyncing
+    }
+
+    private var reloadConfirmationMessage: String {
+        if bufferStatus.isDirty && bufferStatus.hasExternalChanges {
+            return "The file changed on disk and this editor also has unsaved changes. Reloading will discard the in-memory version."
+        }
+        if bufferStatus.isDirty {
+            return "Reloading from disk will discard unsaved changes in this editor."
+        }
+        return "Reload the latest file contents from disk?"
     }
 
     private var cursorLocation: (line: Int, column: Int) {
@@ -348,10 +455,140 @@ struct EditorView: View {
                     cursorByteOffset = min(cursorByteOffset, content.utf8.count)
                     inlineErrorMessage = nil
                 }
+                await refreshBufferStatus(silently: true)
+                await MainActor.run {
+                    scheduleAutosave()
+                }
             } catch {
                 await MainActor.run {
                     inlineErrorMessage = error.localizedDescription
                 }
+            }
+        }
+    }
+
+    private func performSave() {
+        autosaveTask?.cancel()
+        Task {
+            await performSave(trigger: .manual)
+        }
+    }
+
+    private func performReload() {
+        guard let id = viewId else { return }
+        autosaveTask?.cancel()
+
+        Task {
+            await editPipeline?.value
+            await MainActor.run {
+                isSyncing = true
+                inlineErrorMessage = nil
+                transientStatusMessage = nil
+            }
+
+            do {
+                let (content, loadedSpans, status) = try await client.reloadFromDisk(viewId: id)
+                await MainActor.run {
+                    text = content
+                    spans = loadedSpans
+                    cursorByteOffset = min(cursorByteOffset, content.utf8.count)
+                    bufferStatus = status
+                    transientStatusMessage = "Reloaded"
+                    isSyncing = false
+                }
+            } catch {
+                await MainActor.run {
+                    inlineErrorMessage = error.localizedDescription
+                    isSyncing = false
+                }
+                await refreshBufferStatus(silently: true)
+            }
+        }
+    }
+
+    private func scheduleAutosave() {
+        autosaveTask?.cancel()
+        guard isActive else { return }
+        guard bufferStatus.canSave, bufferStatus.isDirty, let id = viewId else { return }
+
+        autosaveTask = Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard !Task.isCancelled else { return }
+            await performSave(trigger: .autosave, viewIdOverride: id)
+        }
+    }
+
+    private func performSave(trigger: SaveTrigger, viewIdOverride: UInt64? = nil) async {
+        guard let id = viewIdOverride ?? viewId else { return }
+        guard bufferStatus.canSave else { return }
+
+        await editPipeline?.value
+        await MainActor.run {
+            isSyncing = true
+            inlineErrorMessage = nil
+            if trigger == .manual {
+                transientStatusMessage = nil
+            }
+        }
+
+        do {
+            let status = try await client.save(viewId: id)
+            await MainActor.run {
+                bufferStatus = status
+                transientStatusMessage = trigger == .manual ? "Saved" : "Autosaved"
+                isSyncing = false
+            }
+        } catch {
+            await MainActor.run {
+                inlineErrorMessage =
+                    trigger == .autosave
+                    ? "Autosave failed: \(error.localizedDescription)"
+                    : error.localizedDescription
+                transientStatusMessage = nil
+                isSyncing = false
+            }
+            await refreshBufferStatus(silently: true)
+        }
+    }
+
+    private func startStatusRefreshLoop(for id: UInt64) {
+        statusRefreshTask?.cancel()
+        statusRefreshTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard !Task.isCancelled else { break }
+                await refreshBufferStatus(viewIdOverride: id, silently: true)
+            }
+        }
+    }
+
+    private func updateActivity(_ active: Bool) {
+        if active {
+            if let id = viewId {
+                startStatusRefreshLoop(for: id)
+                Task { await refreshBufferStatus(viewIdOverride: id, silently: true) }
+                if bufferStatus.isDirty {
+                    scheduleAutosave()
+                }
+            }
+        } else {
+            statusRefreshTask?.cancel()
+            autosaveTask?.cancel()
+        }
+    }
+
+    private func refreshBufferStatus(viewIdOverride: UInt64? = nil, silently: Bool) async {
+        guard let id = viewIdOverride ?? viewId else { return }
+        do {
+            let status = try await client.getBufferStatus(viewId: id)
+            await MainActor.run {
+                guard self.viewId == id else { return }
+                bufferStatus = status
+            }
+        } catch {
+            guard !silently else { return }
+            await MainActor.run {
+                inlineErrorMessage = error.localizedDescription
             }
         }
     }

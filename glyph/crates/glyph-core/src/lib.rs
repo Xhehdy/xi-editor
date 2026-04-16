@@ -12,10 +12,11 @@ use glyph_graph::{CodeGraph, Edge, EdgeKind, Node, NodeId, NodeKind};
 use glyph_llm::LlmClient;
 use glyph_patch::Patch;
 use glyph_protocol::{
-    CoreToUi, ErrorCode, GraphContextItem, GraphEdgeInfo, GraphNodeInfo, IndexQueueStatsInfo,
-    SymbolInfo, UiToCore,
+    BufferStatusInfo, CoreToUi, ErrorCode, GraphContextItem, GraphEdgeInfo, GraphNodeInfo,
+    IndexQueueStatsInfo, SymbolInfo, UiToCore,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,6 +31,12 @@ use glyph_syntax::{Language, SyntaxHighlighter};
 pub struct Glyph {
     /// Active buffers
     buffers: Arc<RwLock<HashMap<BufferId, Buffer>>>,
+    /// Backing file path per buffer, when file-backed
+    buffer_paths: Arc<RwLock<HashMap<BufferId, PathBuf>>>,
+    /// Last known disk metadata for file-backed buffers
+    disk_state: Arc<RwLock<HashMap<BufferId, BufferDiskState>>>,
+    /// Background file watch tasks for file-backed buffers
+    file_watchers: Arc<Mutex<HashMap<BufferId, tokio::task::JoinHandle<()>>>>,
     /// View to buffer mapping
     views: Arc<RwLock<HashMap<ViewId, BufferId>>>,
     /// Buffer language mapping
@@ -94,6 +101,14 @@ struct IndexQueueState {
     last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct BufferDiskState {
+    last_known_modification: Option<SystemTime>,
+    last_observed_modification: Option<SystemTime>,
+    has_external_changes: bool,
+    last_watch_error: Option<String>,
+}
+
 impl IndexQueueState {
     fn new() -> Self {
         Self {
@@ -126,6 +141,7 @@ impl Glyph {
     const INDEX_QUEUE_RETRY_BACKOFF_MS: u64 = 150;
     const INDEX_QUEUE_MAX_RETRIES: u8 = 2;
     const INDEX_QUEUE_MAX_PENDING: usize = 256;
+    const FILE_WATCH_POLL_MS: u64 = 750;
 
     /// Creates a new Glyph instance
     pub fn new() -> Self {
@@ -140,6 +156,9 @@ impl Glyph {
 
         Self {
             buffers: Arc::new(RwLock::new(HashMap::new())),
+            buffer_paths: Arc::new(RwLock::new(HashMap::new())),
+            disk_state: Arc::new(RwLock::new(HashMap::new())),
+            file_watchers: Arc::new(Mutex::new(HashMap::new())),
             views: Arc::new(RwLock::new(HashMap::new())),
             languages: Arc::new(RwLock::new(HashMap::new())),
             revisions: Arc::new(RwLock::new(HashMap::new())),
@@ -251,6 +270,425 @@ impl Glyph {
             code,
             retryable,
             should_resync,
+        }
+    }
+
+    fn current_file_modified_at(path: &Path) -> std::io::Result<Option<SystemTime>> {
+        match std::fs::metadata(path) {
+            Ok(metadata) => Ok(metadata.modified().ok()),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn initial_disk_state(modification: Option<SystemTime>) -> BufferDiskState {
+        BufferDiskState {
+            last_known_modification: modification,
+            last_observed_modification: modification,
+            has_external_changes: false,
+            last_watch_error: None,
+        }
+    }
+
+    fn build_buffer_status(
+        path: Option<&Path>,
+        buffer: &Buffer,
+        disk_state: Option<&BufferDiskState>,
+    ) -> BufferStatusInfo {
+        let path_string = path.map(|path| path.to_string_lossy().to_string());
+        let has_external_changes = match (path, disk_state) {
+            (Some(path), Some(state)) => match Self::current_file_modified_at(path) {
+                Ok(current_modification) => {
+                    state.has_external_changes
+                        || current_modification != state.last_known_modification
+                }
+                Err(_) => true,
+            },
+            (None, Some(state)) => state.has_external_changes,
+            (Some(path), None) => match Self::current_file_modified_at(path) {
+                Ok(current_modification) => current_modification.is_some(),
+                Err(_) => true,
+            },
+            (None, None) => false,
+        };
+
+        BufferStatusInfo {
+            path: path_string,
+            is_dirty: buffer.is_dirty(),
+            has_external_changes,
+            can_save: path.is_some(),
+        }
+    }
+
+    fn persist_buffer_atomically(path: &Path, content: &str) -> Result<Option<SystemTime>, String> {
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "Failed to create parent directory for '{}': {}",
+                path.display(),
+                err
+            )
+        })?;
+
+        let file_name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("glyph-buffer");
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let original_permissions = std::fs::metadata(path)
+            .ok()
+            .map(|metadata| metadata.permissions());
+
+        let mut last_create_error = None;
+        for attempt in 0..16u8 {
+            let temp_path = parent.join(format!(
+                ".{}.glyph-save-{}-{}-{}.tmp",
+                file_name,
+                std::process::id(),
+                suffix,
+                attempt
+            ));
+
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temp_path)
+            {
+                Ok(mut temp_file) => {
+                    if let Err(err) = temp_file.write_all(content.as_bytes()) {
+                        let _ = std::fs::remove_file(&temp_path);
+                        return Err(format!(
+                            "Failed writing temporary save file '{}': {}",
+                            temp_path.display(),
+                            err
+                        ));
+                    }
+                    if let Err(err) = temp_file.sync_all() {
+                        let _ = std::fs::remove_file(&temp_path);
+                        return Err(format!(
+                            "Failed syncing temporary save file '{}': {}",
+                            temp_path.display(),
+                            err
+                        ));
+                    }
+                    drop(temp_file);
+
+                    if let Some(permissions) = original_permissions.clone() {
+                        if let Err(err) = std::fs::set_permissions(&temp_path, permissions) {
+                            let _ = std::fs::remove_file(&temp_path);
+                            return Err(format!(
+                                "Failed preserving file permissions for '{}': {}",
+                                path.display(),
+                                err
+                            ));
+                        }
+                    }
+
+                    std::fs::rename(&temp_path, path).map_err(|err| {
+                        let _ = std::fs::remove_file(&temp_path);
+                        format!(
+                            "Failed replacing '{}' with saved content: {}",
+                            path.display(),
+                            err
+                        )
+                    })?;
+
+                    return Self::current_file_modified_at(path).map_err(|err| {
+                        format!(
+                            "Saved '{}' but failed reading updated file metadata: {}",
+                            path.display(),
+                            err
+                        )
+                    });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    last_create_error = Some(err);
+                }
+                Err(err) => {
+                    return Err(format!(
+                        "Failed creating temporary save file next to '{}': {}",
+                        path.display(),
+                        err
+                    ));
+                }
+            }
+        }
+
+        Err(format!(
+            "Failed creating temporary save file next to '{}': {}",
+            path.display(),
+            last_create_error
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        ))
+    }
+
+    fn ensure_file_watch(&self, buffer_id: BufferId, path: PathBuf) {
+        let Ok(mut watchers) = self.file_watchers.lock() else {
+            return;
+        };
+        if watchers.contains_key(&buffer_id) {
+            return;
+        }
+
+        let disk_state = self.disk_state.clone();
+        let poll_interval = Duration::from_millis(Self::FILE_WATCH_POLL_MS);
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(poll_interval).await;
+
+                let observation = match Glyph::current_file_modified_at(&path) {
+                    Ok(modification) => modification,
+                    Err(err) => {
+                        let mut state_map = disk_state.write().await;
+                        let Some(state) = state_map.get_mut(&buffer_id) else {
+                            break;
+                        };
+                        state.last_watch_error =
+                            Some(format!("Failed observing '{}': {}", path.display(), err));
+                        state.has_external_changes = true;
+                        continue;
+                    }
+                };
+
+                let mut state_map = disk_state.write().await;
+                let Some(state) = state_map.get_mut(&buffer_id) else {
+                    break;
+                };
+                state.last_observed_modification = observation;
+                state.has_external_changes = observation != state.last_known_modification;
+                state.last_watch_error = None;
+            }
+        });
+
+        watchers.insert(buffer_id, handle);
+    }
+
+    fn stop_file_watch(&self, buffer_id: BufferId) {
+        if let Ok(mut watchers) = self.file_watchers.lock() {
+            if let Some(handle) = watchers.remove(&buffer_id) {
+                handle.abort();
+            }
+        }
+    }
+
+    async fn get_buffer_status_for_view(&self, view_id: ViewId, buffer_id: BufferId) -> CoreToUi {
+        let path = {
+            let paths = self.buffer_paths.read().await;
+            paths.get(&buffer_id).cloned()
+        };
+        let disk_state = {
+            let state = self.disk_state.read().await;
+            state.get(&buffer_id).cloned()
+        };
+        let buffers = self.buffers.read().await;
+        let Some(buffer) = buffers.get(&buffer_id) else {
+            return Self::protocol_error(
+                ErrorCode::BufferNotFound,
+                format!("Buffer for view {:?} not found", view_id),
+                false,
+                true,
+            );
+        };
+
+        CoreToUi::BufferStatus {
+            view_id,
+            status: Self::build_buffer_status(path.as_deref(), buffer, disk_state.as_ref()),
+        }
+    }
+
+    async fn save_view(&self, view_id: ViewId, buffer_id: BufferId) -> CoreToUi {
+        let path = {
+            let paths = self.buffer_paths.read().await;
+            paths.get(&buffer_id).cloned()
+        };
+        let Some(path) = path else {
+            return Self::protocol_error(
+                ErrorCode::SaveUnavailable,
+                format!("View {:?} is not backed by a file", view_id),
+                false,
+                false,
+            );
+        };
+
+        let (content, known_modification) = {
+            let buffers = self.buffers.read().await;
+            let Some(buffer) = buffers.get(&buffer_id) else {
+                return Self::protocol_error(
+                    ErrorCode::BufferNotFound,
+                    format!("Buffer for view {:?} not found", view_id),
+                    false,
+                    true,
+                );
+            };
+            let content = buffer.content();
+            drop(buffers);
+
+            let disk_state = self.disk_state.read().await;
+            let known_modification = disk_state
+                .get(&buffer_id)
+                .and_then(|state| state.last_known_modification);
+            (content, known_modification)
+        };
+
+        let current_modification = match Self::current_file_modified_at(&path) {
+            Ok(modification) => modification,
+            Err(err) => {
+                return Self::protocol_error(
+                    ErrorCode::SaveFailed,
+                    format!("Failed reading '{}' before save: {}", path.display(), err),
+                    true,
+                    false,
+                );
+            }
+        };
+
+        if current_modification != known_modification {
+            return Self::protocol_error(
+                ErrorCode::FileModifiedOnDisk,
+                format!(
+                    "Refusing to save '{}' because it changed on disk; reload before saving",
+                    path.display()
+                ),
+                false,
+                false,
+            );
+        }
+
+        let saved_modification = match Self::persist_buffer_atomically(&path, &content) {
+            Ok(modification) => modification,
+            Err(message) => {
+                return Self::protocol_error(ErrorCode::SaveFailed, message, true, false);
+            }
+        };
+
+        let status = {
+            let mut buffers = self.buffers.write().await;
+            let Some(buffer) = buffers.get_mut(&buffer_id) else {
+                return Self::protocol_error(
+                    ErrorCode::BufferNotFound,
+                    format!("Buffer for view {:?} not found after save", view_id),
+                    false,
+                    true,
+                );
+            };
+            buffer.mark_saved();
+
+            let mut disk_state = self.disk_state.write().await;
+            let state = disk_state.entry(buffer_id).or_default();
+            state.last_known_modification = saved_modification;
+            state.last_observed_modification = saved_modification;
+            state.has_external_changes = false;
+            state.last_watch_error = None;
+            Self::build_buffer_status(Some(&path), buffer, Some(state))
+        };
+
+        let revision = {
+            let revisions = self.revisions.read().await;
+            revisions.get(&buffer_id).copied().unwrap_or(0)
+        };
+
+        CoreToUi::Saved {
+            view_id,
+            revision,
+            status,
+        }
+    }
+
+    async fn reload_view_from_disk(&self, view_id: ViewId, buffer_id: BufferId) -> CoreToUi {
+        let path = {
+            let paths = self.buffer_paths.read().await;
+            paths.get(&buffer_id).cloned()
+        };
+        let Some(path) = path else {
+            return Self::protocol_error(
+                ErrorCode::ReloadFailed,
+                format!("View {:?} is not backed by a file", view_id),
+                false,
+                false,
+            );
+        };
+
+        let language = {
+            let languages = self.languages.read().await;
+            languages
+                .get(&buffer_id)
+                .copied()
+                .unwrap_or(Language::Plain)
+        };
+
+        let content = match tokio::fs::read_to_string(&path).await {
+            Ok(content) => content,
+            Err(err) => {
+                return Self::protocol_error(
+                    ErrorCode::ReloadFailed,
+                    format!("Failed reloading '{}': {}", path.display(), err),
+                    true,
+                    false,
+                );
+            }
+        };
+
+        let modification = match Self::current_file_modified_at(&path) {
+            Ok(modification) => modification,
+            Err(err) => {
+                return Self::protocol_error(
+                    ErrorCode::ReloadFailed,
+                    format!(
+                        "Reloaded '{}' but failed reading updated file metadata: {}",
+                        path.display(),
+                        err
+                    ),
+                    true,
+                    false,
+                );
+            }
+        };
+
+        let revision = {
+            let mut buffers = self.buffers.write().await;
+            let Some(buffer) = buffers.get_mut(&buffer_id) else {
+                return Self::protocol_error(
+                    ErrorCode::BufferNotFound,
+                    format!("Buffer for view {:?} not found", view_id),
+                    false,
+                    true,
+                );
+            };
+            buffer.replace_all(&content);
+
+            let mut revisions = self.revisions.write().await;
+            let revision = revisions.entry(buffer_id).or_insert(0);
+            *revision = revision.saturating_add(1);
+            *revision
+        };
+
+        {
+            let mut cursors = self.cursors.write().await;
+            if let Some(cursor) = cursors.get_mut(&view_id) {
+                *cursor = (*cursor).min(content.len());
+            }
+        }
+
+        {
+            let mut disk_state = self.disk_state.write().await;
+            let state = disk_state.entry(buffer_id).or_default();
+            state.last_known_modification = modification;
+            state.last_observed_modification = modification;
+            state.has_external_changes = false;
+            state.last_watch_error = None;
+        }
+
+        let spans = self.highlight(&content, language).await;
+        CoreToUi::SetContent {
+            view_id,
+            content,
+            spans,
+            revision,
         }
     }
 
@@ -2714,6 +3152,19 @@ impl Glyph {
                     let mut revisions = self.revisions.write().await;
                     revisions.insert(buffer_id, 0);
                 }
+                if let Some(ref path) = path {
+                    let path_buf = PathBuf::from(path);
+                    let modification = Self::current_file_modified_at(&path_buf).ok().flatten();
+                    {
+                        let mut buffer_paths = self.buffer_paths.write().await;
+                        buffer_paths.insert(buffer_id, path_buf.clone());
+                    }
+                    {
+                        let mut disk_state = self.disk_state.write().await;
+                        disk_state.insert(buffer_id, Self::initial_disk_state(modification));
+                    }
+                    self.ensure_file_watch(buffer_id, path_buf);
+                }
                 {
                     let mut cursors = self.cursors.write().await;
                     cursors.insert(view_id, content.len());
@@ -2739,6 +3190,11 @@ impl Glyph {
                     if !still_used {
                         let mut buffers = self.buffers.write().await;
                         buffers.remove(&buffer_id);
+                        self.stop_file_watch(buffer_id);
+                        let mut buffer_paths = self.buffer_paths.write().await;
+                        buffer_paths.remove(&buffer_id);
+                        let mut disk_state = self.disk_state.write().await;
+                        disk_state.remove(&buffer_id);
                         let mut langs = self.languages.write().await;
                         langs.remove(&buffer_id);
                         let mut revisions = self.revisions.write().await;
@@ -2765,6 +3221,11 @@ impl Glyph {
                         false,
                         false,
                     );
+                };
+
+                let event = match event {
+                    InputEvent::Save => return self.save_view(view_id, buffer_id).await,
+                    other => other,
                 };
 
                 let mut buffers = self.buffers.write().await;
@@ -2893,10 +3354,7 @@ impl Glyph {
                             revision,
                         }
                     }
-                    InputEvent::Save => {
-                        buffer.mark_saved();
-                        CoreToUi::Event(CoreEvent::BufferChanged { view_id })
-                    }
+                    InputEvent::Save => unreachable!("save handled before buffer mutation path"),
                     InputEvent::Find { .. } => CoreToUi::Event(CoreEvent::CursorMoved {
                         view_id,
                         position: *cursor,
@@ -3036,6 +3494,42 @@ impl Glyph {
                     false,
                     false,
                 )
+            }
+
+            UiToCore::GetBufferStatus { view_id } => {
+                let buffer_id = {
+                    let views = self.views.read().await;
+                    views.get(&view_id).copied()
+                };
+
+                let Some(buffer_id) = buffer_id else {
+                    return Self::protocol_error(
+                        ErrorCode::ViewNotFound,
+                        format!("View {:?} not found", view_id),
+                        false,
+                        false,
+                    );
+                };
+
+                self.get_buffer_status_for_view(view_id, buffer_id).await
+            }
+
+            UiToCore::ReloadFromDisk { view_id } => {
+                let buffer_id = {
+                    let views = self.views.read().await;
+                    views.get(&view_id).copied()
+                };
+
+                let Some(buffer_id) = buffer_id else {
+                    return Self::protocol_error(
+                        ErrorCode::ViewNotFound,
+                        format!("View {:?} not found", view_id),
+                        false,
+                        false,
+                    );
+                };
+
+                self.reload_view_from_disk(view_id, buffer_id).await
             }
 
             UiToCore::Chat {
@@ -3334,11 +3828,26 @@ impl Default for Glyph {
     }
 }
 
+impl Drop for Glyph {
+    fn drop(&mut self) {
+        if let Ok(mut watchers) = self.file_watchers.lock() {
+            for (_, handle) in watchers.drain() {
+                handle.abort();
+            }
+        }
+        if let Ok(mut queue_state) = self.index_queue.lock() {
+            for (_, task) in queue_state.tasks.drain() {
+                task.handle.abort();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use glyph_events::Movement;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn unique_temp_dir(test_name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -3366,6 +3875,13 @@ mod tests {
         match response {
             CoreToUi::GraphContext { summary, items } => (summary, items),
             other => panic!("expected graph context response, got {:?}", other),
+        }
+    }
+
+    fn expect_buffer_status(response: CoreToUi) -> BufferStatusInfo {
+        match response {
+            CoreToUi::BufferStatus { status, .. } => status,
+            other => panic!("expected buffer status response, got {:?}", other),
         }
     }
 
@@ -3889,6 +4405,194 @@ mod tests {
             .await;
 
         assert!(matches!(response, CoreToUi::Error { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_save_persists_file_and_clears_dirty_status() {
+        let root = unique_temp_dir("save_file");
+        let file_path = root.join("note.txt");
+        std::fs::write(&file_path, "hello").expect("failed to seed file");
+
+        let glyph = Glyph::new();
+        let view_id = match glyph
+            .handle_message(UiToCore::NewView {
+                path: Some(file_path.to_string_lossy().to_string()),
+            })
+            .await
+        {
+            CoreToUi::ViewCreated { view_id, .. } => view_id,
+            other => panic!("expected view creation, got {:?}", other),
+        };
+
+        let edit = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 5,
+                deleted_len: 0,
+                inserted_text: " world".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(edit, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        let save_response = glyph
+            .handle_message(UiToCore::Input {
+                view_id,
+                event: InputEvent::Save,
+            })
+            .await;
+        let saved_status = match save_response {
+            CoreToUi::Saved {
+                revision, status, ..
+            } => {
+                assert_eq!(revision, 1);
+                status
+            }
+            other => panic!("expected saved response, got {:?}", other),
+        };
+
+        assert!(!saved_status.is_dirty);
+        assert!(!saved_status.has_external_changes);
+        assert_eq!(
+            std::fs::read_to_string(&file_path).expect("failed reading saved file"),
+            "hello world"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_save_rejects_external_file_modification() {
+        let root = unique_temp_dir("save_conflict");
+        let file_path = root.join("conflict.txt");
+        std::fs::write(&file_path, "hello").expect("failed to seed file");
+
+        let glyph = Glyph::new();
+        let view_id = match glyph
+            .handle_message(UiToCore::NewView {
+                path: Some(file_path.to_string_lossy().to_string()),
+            })
+            .await
+        {
+            CoreToUi::ViewCreated { view_id, .. } => view_id,
+            other => panic!("expected view creation, got {:?}", other),
+        };
+
+        let edit = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 5,
+                deleted_len: 0,
+                inserted_text: " local".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(edit, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        std::thread::sleep(Duration::from_millis(25));
+        std::fs::write(&file_path, "hello remote").expect("failed writing conflicting file");
+
+        let save_response = glyph
+            .handle_message(UiToCore::Input {
+                view_id,
+                event: InputEvent::Save,
+            })
+            .await;
+        assert!(matches!(
+            save_response,
+            CoreToUi::Error {
+                code: ErrorCode::FileModifiedOnDisk,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_reload_from_disk_replaces_content_and_resets_status() {
+        let root = unique_temp_dir("reload_file");
+        let file_path = root.join("reload.txt");
+        std::fs::write(&file_path, "disk v1").expect("failed to seed file");
+
+        let glyph = Glyph::new();
+        let view_id = match glyph
+            .handle_message(UiToCore::NewView {
+                path: Some(file_path.to_string_lossy().to_string()),
+            })
+            .await
+        {
+            CoreToUi::ViewCreated { view_id, .. } => view_id,
+            other => panic!("expected view creation, got {:?}", other),
+        };
+
+        let edit = glyph
+            .handle_message(UiToCore::ApplyEdit {
+                view_id,
+                start: 7,
+                deleted_len: 0,
+                inserted_text: " local".to_string(),
+                base_revision: 0,
+            })
+            .await;
+        assert!(matches!(edit, CoreToUi::ApplyPatch { revision: 1, .. }));
+
+        std::thread::sleep(Duration::from_millis(25));
+        std::fs::write(&file_path, "disk v2").expect("failed updating disk file");
+
+        let before_reload_status = expect_buffer_status(
+            glyph
+                .handle_message(UiToCore::GetBufferStatus { view_id })
+                .await,
+        );
+        assert!(before_reload_status.is_dirty);
+        assert!(before_reload_status.has_external_changes);
+
+        let reload_response = glyph
+            .handle_message(UiToCore::ReloadFromDisk { view_id })
+            .await;
+        match reload_response {
+            CoreToUi::SetContent {
+                content, revision, ..
+            } => {
+                assert_eq!(content, "disk v2");
+                assert_eq!(revision, 2);
+            }
+            other => panic!("expected reload set content response, got {:?}", other),
+        }
+
+        let after_reload_status = expect_buffer_status(
+            glyph
+                .handle_message(UiToCore::GetBufferStatus { view_id })
+                .await,
+        );
+        assert!(!after_reload_status.is_dirty);
+        assert!(!after_reload_status.has_external_changes);
+    }
+
+    #[tokio::test]
+    async fn test_file_watch_updates_external_change_status() {
+        let root = unique_temp_dir("watch_file");
+        let file_path = root.join("watch.txt");
+        std::fs::write(&file_path, "watch me").expect("failed to seed file");
+
+        let glyph = Glyph::new();
+        let view_id = match glyph
+            .handle_message(UiToCore::NewView {
+                path: Some(file_path.to_string_lossy().to_string()),
+            })
+            .await
+        {
+            CoreToUi::ViewCreated { view_id, .. } => view_id,
+            other => panic!("expected view creation, got {:?}", other),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        std::fs::write(&file_path, "watch changed").expect("failed updating watched file");
+        tokio::time::sleep(Duration::from_millis(Glyph::FILE_WATCH_POLL_MS * 2)).await;
+
+        let status = expect_buffer_status(
+            glyph
+                .handle_message(UiToCore::GetBufferStatus { view_id })
+                .await,
+        );
+        assert!(status.has_external_changes);
     }
 
     #[tokio::test]
